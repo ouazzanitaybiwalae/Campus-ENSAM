@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import LiveRoute from './src/LiveNavigation.jsx';
+import LiveRoute, { requestMotionPermission } from './src/LiveNavigation.jsx';
 
 // Multilingual UI Dictionary
 const TRANSLATIONS = {
@@ -22,20 +22,16 @@ const TRANSLATIONS = {
     floor: 'Étage',
     groundFloor: 'RDC',
     youAreHere: 'Vous êtes ici',
-    next: 'Suivant',
-    prev: 'Précédent',
     step: 'Étape',
     remaining: 'restants',
     arrived: 'Vous êtes arrivé à destination 🎉',
     recenter: 'Recentrer',
-    autoSteps: 'Suivi par pas (bêta)',
     demo: 'Démo',
-    allSteps: 'Toutes les étapes',
-    hideSteps: 'Masquer les étapes',
+    stepsTitle: 'Instructions',
     stairsUp: (b, f) => `Montez l'escalier de ${b} jusqu'à : ${f}`,
     stairsDown: (b, f) => `Descendez l'escalier de ${b} jusqu'à : ${f}`,
-    motionDenied: "Capteurs de mouvement refusés. Utilisez le bouton « Suivant » pour avancer.",
-    motionNone: "Aucun capteur de mouvement détecté sur cet appareil. Utilisez « Suivant » pour avancer.",
+    motionDenied: "L'accès aux capteurs de mouvement a été refusé : le point ne peut pas suivre vos pas. Autorisez-le dans les réglages du navigateur, puis relancez l'itinéraire.",
+    motionNone: "Aucun capteur de mouvement détecté sur cet appareil (ou la page n'est pas servie en HTTPS) : le point ne peut pas suivre vos pas.",
     resumeTitle: (d) => `Reprendre l'itinéraire vers « ${d} » depuis ce point ?`,
     resumeYes: 'Reprendre',
     resumeNo: 'Ignorer',
@@ -71,20 +67,16 @@ const TRANSLATIONS = {
     floor: 'Floor',
     groundFloor: 'Ground Floor',
     youAreHere: 'You are here',
-    next: 'Next',
-    prev: 'Back',
     step: 'Step',
     remaining: 'left',
     arrived: 'You have arrived 🎉',
     recenter: 'Re-center',
-    autoSteps: 'Step tracking (beta)',
     demo: 'Demo',
-    allSteps: 'All steps',
-    hideSteps: 'Hide steps',
+    stepsTitle: 'Directions',
     stairsUp: (b, f) => `Take the stairs in ${b} up to: ${f}`,
     stairsDown: (b, f) => `Take the stairs in ${b} down to: ${f}`,
-    motionDenied: 'Motion sensors were denied. Use the "Next" button to move forward.',
-    motionNone: 'No motion sensor detected on this device. Use "Next" to move forward.',
+    motionDenied: 'Motion sensor access was denied, so the dot cannot follow your steps. Allow it in your browser settings, then request the route again.',
+    motionNone: 'No motion sensor detected on this device (or the page is not served over HTTPS), so the dot cannot follow your steps.',
     resumeTitle: (d) => `Continue the route to "${d}" from this point?`,
     resumeYes: 'Continue',
     resumeNo: 'Dismiss',
@@ -183,6 +175,7 @@ export default function AdminChat() {
   async function sendMessage(overrideText) {
     const text = (overrideText ?? inputValue).trim();
     if (!text) return;
+    requestMotionPermission(); // must run inside the tap, before any await (iOS)
 
     const userMsg = { role: 'user', text, id: Date.now() };
     const pendingId = Date.now() + 1;
@@ -221,135 +214,190 @@ export default function AdminChat() {
     sendMessage(s);
   }
 
+  const inputBar = (
+    <form
+      className="cn-input"
+      onSubmit={(e) => {
+        e.preventDefault();
+        sendMessage();
+      }}
+    >
+      <input
+        value={inputValue}
+        onChange={(e) => setInputValue(e.target.value)}
+        placeholder={t.placeholder}
+        enterKeyHint="send"
+        autoComplete="off"
+      />
+      <button type="submit" disabled={!inputValue.trim()}>{t.send}</button>
+    </form>
+  );
+
   return (
-    <div style={{ display: 'flex', height: '100vh', width: '100%', fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif", background: '#f4f7fb', color: 'oklch(0.24 0.03 255)', overflow: 'hidden' }}>
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, background: '#f4f7fb' }}>
-        
-        {/* Language Bar */}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '10px 20px', background: '#fff', borderBottom: '1px solid oklch(0.9 0.01 258)', gap: 8 }}>
-          <button onClick={() => setLang('fr')} style={{ background: lang === 'fr' ? 'oklch(0.5 0.15 258)' : '#e8edf5', color: lang === 'fr' ? '#fff' : '#333', border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>FR</button>
-          <button onClick={() => setLang('en')} style={{ background: lang === 'en' ? 'oklch(0.5 0.15 258)' : '#e8edf5', color: lang === 'en' ? '#fff' : '#333', border: 'none', borderRadius: 6, padding: '4px 10px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>EN</button>
+    <div className="cn-app">
+      <header className="cn-header">
+        <img src="/logo-ensam.jpg" alt="ENSAM Rabat — École Nationale Supérieure d'Arts et Métiers" className="cn-logo" />
+        <div className="cn-lang">
+          <button className={lang === 'fr' ? 'on' : ''} onClick={() => setLang('fr')}>FR</button>
+          <button className={lang === 'en' ? 'on' : ''} onClick={() => setLang('en')}>EN</button>
         </div>
+      </header>
 
-        {!hasMessages && (
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '0 24px', textAlign: 'center' }}>
-            <div style={{ width: 64, height: 64, borderRadius: 16, background: 'linear-gradient(135deg, oklch(0.62 0.14 250), oklch(0.48 0.15 260))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 24, color: '#fff', boxShadow: '0 8px 24px oklch(0.5 0.14 258 / 0.25)', marginBottom: 20 }}>EC</div>
-            <div style={{ fontSize: 22, fontWeight: 600, color: 'oklch(0.22 0.03 258)', marginBottom: 6 }}>{t.title}</div>
-            <div style={{ fontSize: 14.5, color: 'oklch(0.48 0.02 258)', maxWidth: 420, lineHeight: 1.5, marginBottom: 28 }}>{t.subtitle}</div>
+      {!hasMessages && (
+        <main className="cn-welcome">
+          <h1>{t.title}</h1>
+          <p>{t.subtitle}</p>
 
-            {startNode && (
-              <div style={{ fontSize: 11, color: '#666', padding: '4px 8px', background: '#e8edf5', borderRadius: 6, marginBottom: 12 }}>
-                {t.startPoint} <strong>{startNode}</strong>
-              </div>
-            )}
-
-            {resume && startNode && (
-              <div style={{ background: '#FFF8E6', border: '1px solid #F2D9A0', borderRadius: 12, padding: '12px 14px', marginBottom: 14, maxWidth: 600, fontSize: 14 }}>
-                <div style={{ marginBottom: 10, fontWeight: 600 }}>{t.resumeTitle(resume.destination)}</div>
-                <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-                  <button onClick={() => sendMessage(resume.text)} style={{ background: 'oklch(0.5 0.15 258)', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontWeight: 600, cursor: 'pointer' }}>{t.resumeYes}</button>
-                  <button onClick={() => { clearLastRoute(); setResume(null); }} style={{ background: '#fff', border: '1px solid #ddd', borderRadius: 8, padding: '8px 16px', fontWeight: 600, cursor: 'pointer' }}>{t.resumeNo}</button>
-                </div>
-              </div>
-            )}
-
-            <div style={{ width: '100%', maxWidth: 600, display: 'flex', alignItems: 'center', gap: 10, background: '#fff', border: '1px solid oklch(0.88 0.01 258)', borderRadius: 14, padding: '6px 6px 6px 18px', boxShadow: '0 2px 10px oklch(0.4 0.05 258 / 0.06)' }}>
-              <input
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
-                placeholder={t.placeholder}
-                style={{ flex: 1, border: 'none', outline: 'none', fontSize: 14.5, padding: '10px 0', color: 'oklch(0.22 0.03 258)', background: 'transparent' }}
-              />
-              <button onClick={() => sendMessage()} style={{ background: 'oklch(0.5 0.15 258)', color: '#fff', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer', flex: 'none' }}>{t.send}</button>
+          {startNode && (
+            <div className="cn-start">
+              {t.startPoint} <strong>{startNode}</strong>
             </div>
+          )}
 
-            <div style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap', justifyContent: 'center', maxWidth: 600 }}>
-              {t.suggestions.map((s) => (
-                <div key={s} onClick={() => useSuggestion(s)} style={{ fontSize: 13, color: 'oklch(0.4 0.1 258)', background: 'oklch(0.94 0.02 258)', border: '1px solid oklch(0.88 0.03 258)', borderRadius: 20, padding: '7px 14px', cursor: 'pointer' }}>{s}</div>
-              ))}
+          {resume && startNode && (
+            <div className="cn-resume">
+              <div style={{ marginBottom: 10, fontWeight: 600 }}>{t.resumeTitle(resume.destination)}</div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+                <button className="cn-btn" onClick={() => sendMessage(resume.text)}>{t.resumeYes}</button>
+                <button className="cn-btn ghost" onClick={() => { clearLastRoute(); setResume(null); }}>{t.resumeNo}</button>
+              </div>
             </div>
+          )}
+
+          {inputBar}
+
+          <div className="cn-suggestions">
+            {t.suggestions.map((s) => (
+              <button key={s} onClick={() => useSuggestion(s)}>{s}</button>
+            ))}
           </div>
-        )}
+        </main>
+      )}
 
-        {hasMessages && (
-          <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 28px', borderBottom: '1px solid oklch(0.9 0.01 258)', background: '#fff', flex: 'none' }}>
-              <div style={{ width: 32, height: 32, borderRadius: 9, background: 'linear-gradient(135deg, oklch(0.62 0.14 250), oklch(0.48 0.15 260))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 13, color: '#fff' }}>EC</div>
-              <div style={{ fontSize: 14.5, fontWeight: 600 }}>{t.title}</div>
-              <div style={{ fontSize: 12, color: 'oklch(0.55 0.1 150)', background: 'oklch(0.94 0.05 150)', padding: '3px 9px', borderRadius: 20, marginLeft: 6 }}>{t.online}</div>
-            </div>
+      {hasMessages && (
+        <>
+          <main className="cn-thread">
+            <div className="cn-thread-inner">
+              {messages.map((msg) => (
+                <div key={msg.id} className={`cn-msg ${msg.role}`}>
+                  <div className="cn-who">{msg.role === 'user' ? t.user : t.bot}</div>
 
-            <div style={{ flex: 1, overflowY: 'auto', padding: '28px 0' }}>
-              <div style={{ maxWidth: 720, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 22, padding: '0 28px' }}>
-                {messages.map((msg) => (
-                  <div key={msg.id} style={{ display: 'flex', flexDirection: 'column', alignItems: msg.role === 'user' ? 'flex-end' : 'flex-start', gap: 8 }}>
-                    <div style={{ fontSize: 11.5, color: 'oklch(0.55 0.02 258)', padding: '0 4px' }}>{msg.role === 'user' ? t.user : t.bot}</div>
+                  {msg.role === 'user' && <div className="cn-bubble user">{msg.text}</div>}
 
-                    {msg.role === 'user' && (
-                      <div style={{ background: 'oklch(0.5 0.15 258)', color: '#fff', padding: '12px 16px', borderRadius: '16px 16px 4px 16px', fontSize: 14.5, lineHeight: 1.5, maxWidth: 480 }}>{msg.text}</div>
-                    )}
+                  {msg.role === 'assistant' && (
+                    <div className={`cn-bubble bot${msg.mapData ? ' route' : ''}`}>
+                      {msg.pending && (
+                        <div style={{ display: 'flex', gap: 5, padding: '4px 0' }}>
+                          <span className="dot" style={{ animationDelay: '0s' }} />
+                          <span className="dot" style={{ animationDelay: '0.2s' }} />
+                          <span className="dot" style={{ animationDelay: '0.4s' }} />
+                        </div>
+                      )}
 
-                    {msg.role === 'assistant' && (
-                      <div style={{ background: '#fff', border: '1px solid oklch(0.9 0.01 258)', padding: '16px 18px', borderRadius: '4px 16px 16px 16px', fontSize: 14.5, lineHeight: 1.6, maxWidth: msg.mapData ? 720 : 560, width: msg.mapData ? '100%' : undefined, boxSizing: 'border-box', color: 'oklch(0.26 0.03 258)', boxShadow: '0 1px 4px oklch(0.4 0.05 258 / 0.05)' }}>
-                        {msg.pending && (
-                          <div style={{ display: 'flex', gap: 5, padding: '4px 0' }}>
-                            <span className="dot" style={{ animationDelay: '0s' }} />
-                            <span className="dot" style={{ animationDelay: '0.2s' }} />
-                            <span className="dot" style={{ animationDelay: '0.4s' }} />
+                      {msg.mapData && msg.id === activeRouteId && (
+                        <LiveRoute
+                          key={msg.id}
+                          route={msg.mapData}
+                          t={t}
+                          onPositionChange={(node) => { positionRef.current = node; }}
+                          onArrived={clearLastRoute}
+                        />
+                      )}
+
+                      {msg.mapData && msg.id !== activeRouteId && (
+                        <>
+                          <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>{t.routeTo} {msg.mapData.destination}</div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            {msg.mapData.steps.map((step, i) => (
+                              <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+                                <div style={{ width: 22, height: 22, borderRadius: '50%', background: 'oklch(0.94 0.03 258)', color: 'oklch(0.45 0.13 258)', fontSize: 11.5, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none', marginTop: 1 }}>{i + 1}</div>
+                                <div style={{ fontSize: 14.5, lineHeight: 1.5 }}>{step}</div>
+                              </div>
+                            ))}
                           </div>
-                        )}
+                        </>
+                      )}
 
-                        {msg.mapData && msg.id === activeRouteId && (
-                          <LiveRoute
-                            key={msg.id}
-                            route={msg.mapData}
-                            t={t}
-                            onPositionChange={(node) => { positionRef.current = node; }}
-                            onArrived={clearLastRoute}
-                          />
-                        )}
-
-                        {msg.mapData && msg.id !== activeRouteId && (
-                          <>
-                            <div style={{ fontWeight: 600, fontSize: 13.5, marginBottom: 8 }}>{t.routeTo} {msg.mapData.destination}</div>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                              {msg.mapData.steps.map((step, i) => (
-                                <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-                                  <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'oklch(0.94 0.03 258)', color: 'oklch(0.45 0.13 258)', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 'none', marginTop: 1 }}>{i + 1}</div>
-                                  <div style={{ fontSize: 14, lineHeight: 1.5 }}>{step}</div>
-                                </div>
-                              ))}
-                            </div>
-                          </>
-                        )}
-
-                        {msg.text && <div>{msg.text}</div>}
-                      </div>
-                    )}
-                  </div>
-                ))}
-                <div ref={scrollAnchorRef} />
-              </div>
+                      {msg.text && <div>{msg.text}</div>}
+                    </div>
+                  )}
+                </div>
+              ))}
+              <div ref={scrollAnchorRef} />
             </div>
+          </main>
 
-            <div style={{ padding: '16px 28px 22px', flex: 'none' }}>
-              <div style={{ maxWidth: 900, margin: '0 auto', display: 'flex', alignItems: 'center', gap: 10, background: '#fff', border: '1px solid oklch(0.88 0.01 258)', borderRadius: 14, padding: '6px 6px 6px 18px', boxShadow: '0 2px 10px oklch(0.4 0.05 258 / 0.06)' }}>
-                <input
-                  value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
-                  placeholder={t.placeholder}
-                  style={{ flex: 1, border: 'none', outline: 'none', fontSize: 14.5, padding: '10px 0', color: 'oklch(0.22 0.03 258)', background: 'transparent' }}
-                />
-                <button onClick={() => sendMessage()} style={{ background: 'oklch(0.5 0.15 258)', color: '#fff', border: 'none', borderRadius: 10, padding: '11px 18px', fontSize: 13.5, fontWeight: 600, cursor: 'pointer', flex: 'none' }}>{t.send}</button>
-              </div>
-            </div>
-          </>
-        )}
-      </div>
+          <footer className="cn-footer">{inputBar}</footer>
+        </>
+      )}
 
       <style>{`
+        html, body, #root { margin: 0; height: 100%; }
+        body { background: #f4f7fb; -webkit-text-size-adjust: 100%; }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        button { font-family: inherit; }
+
+        .cn-app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; width: 100%; overflow: hidden;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+          background: #f4f7fb; color: oklch(0.24 0.03 255); }
+
+        .cn-header { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+          padding: calc(8px + env(safe-area-inset-top)) 16px 8px; background: #f7f7f7; /* same as the logo's background */
+          border-bottom: 1px solid oklch(0.9 0.01 258); }
+        .cn-logo { height: 52px; width: auto; max-width: 62vw; object-fit: contain; display: block; }
+        .cn-lang { display: flex; background: #e6e9ef; border-radius: 9px; padding: 3px; flex: none; }
+        .cn-lang button { border: none; background: transparent; color: #333; border-radius: 7px; padding: 7px 11px;
+          font-size: 13px; font-weight: 600; cursor: pointer; min-width: 40px; }
+        .cn-lang button.on { background: oklch(0.5 0.15 258); color: #fff; }
+
+        .cn-welcome { flex: 1; overflow-y: auto; display: flex; flex-direction: column; align-items: center;
+          justify-content: center; padding: 24px 16px; text-align: center; }
+        .cn-welcome h1 { font-size: 21px; font-weight: 700; color: oklch(0.22 0.03 258); margin: 0 0 8px; }
+        .cn-welcome p { font-size: 15px; color: oklch(0.48 0.02 258); max-width: 440px; line-height: 1.5; margin: 0 0 22px; }
+        .cn-start { font-size: 12px; color: #555; padding: 5px 10px; background: #e8edf5; border-radius: 7px; margin-bottom: 14px; }
+        .cn-resume { width: 100%; max-width: 600px; background: #FFF8E6; border: 1px solid #F2D9A0; border-radius: 14px;
+          padding: 14px; margin-bottom: 14px; font-size: 14.5px; }
+
+        .cn-input { width: 100%; max-width: 600px; margin: 0 auto; display: flex; align-items: center; gap: 8px;
+          background: #fff; border: 1px solid oklch(0.88 0.01 258); border-radius: 14px; padding: 5px 5px 5px 14px;
+          box-shadow: 0 2px 10px oklch(0.4 0.05 258 / 0.06); }
+        .cn-input input { flex: 1; min-width: 0; border: none; outline: none; font-size: 16px; padding: 10px 0;
+          color: oklch(0.22 0.03 258); background: transparent; }
+        .cn-input button, .cn-btn { background: oklch(0.5 0.15 258); color: #fff; border: none; border-radius: 10px;
+          padding: 12px 16px; font-size: 15px; font-weight: 600; cursor: pointer; flex: none; }
+        .cn-input button:disabled { opacity: 0.45; }
+        .cn-btn.ghost { background: #fff; color: #333; border: 1px solid #ddd; }
+
+        .cn-suggestions { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; width: 100%; max-width: 600px; }
+        .cn-suggestions button { font-size: 14.5px; color: oklch(0.4 0.1 258); background: oklch(0.96 0.015 258);
+          border: 1px solid oklch(0.88 0.03 258); border-radius: 12px; padding: 12px 14px; cursor: pointer; text-align: left; }
+
+        .cn-thread { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 16px 0; }
+        .cn-thread-inner { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; padding: 0 12px; }
+        .cn-msg { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+        .cn-msg.user { align-items: flex-end; }
+        .cn-who { font-size: 11.5px; color: oklch(0.55 0.02 258); padding: 0 4px; }
+        .cn-bubble { font-size: 15px; line-height: 1.55; max-width: 88%; }
+        .cn-bubble.user { background: oklch(0.5 0.15 258); color: #fff; padding: 11px 15px; border-radius: 16px 16px 4px 16px; }
+        .cn-bubble.bot { background: #fff; border: 1px solid oklch(0.9 0.01 258); padding: 14px 16px; border-radius: 4px 16px 16px 16px;
+          color: oklch(0.26 0.03 258); box-shadow: 0 1px 4px oklch(0.4 0.05 258 / 0.05); }
+        .cn-bubble.bot.route { width: 100%; max-width: 100%; padding: 14px 12px; }
+
+        .cn-footer { flex: none; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); background: #fff;
+          border-top: 1px solid oklch(0.9 0.01 258); }
+
+        @media (min-width: 720px) {
+          .cn-header { padding-left: 28px; padding-right: 28px; }
+          .cn-logo { height: 60px; }
+          .cn-welcome h1 { font-size: 24px; }
+          .cn-suggestions { flex-direction: row; flex-wrap: wrap; justify-content: center; }
+          .cn-suggestions button { border-radius: 20px; padding: 8px 14px; font-size: 13.5px; }
+          .cn-thread { padding: 24px 0; }
+          .cn-thread-inner { padding: 0 24px; gap: 22px; }
+          .cn-bubble.bot.route { padding: 16px 18px; }
+          .cn-footer { padding-left: 24px; padding-right: 24px; }
+        }
+
         .dot { width:7px; height:7px; border-radius:50%; background: oklch(0.6 0.1 258); animation: dotPulse 1.2s ease-in-out infinite; display:inline-block; }
         @keyframes dotPulse { 0%,80%,100% { opacity:.25; transform:translateY(0); } 40% { opacity:1; transform:translateY(-3px); } }
       `}</style>
