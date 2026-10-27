@@ -1,12 +1,9 @@
 node_modules/
 venv/
 .venv/
-dist/
 *.log
 .env
 
-public/qr-codes/
-*.png
 __pycache__/
 *.pyc
 *.rar
