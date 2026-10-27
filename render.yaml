@@ -1,0 +1,11 @@
+# Render "Blueprint": one Docker web service = website + API on a public HTTPS URL
+services:
+  - type: web
+    name: campus-navigator
+    runtime: docker
+    plan: free            # free sleeps after ~15 min idle; use "starter" for an always-on kiosk
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false       # you paste the value in the Render dashboard (never in git)

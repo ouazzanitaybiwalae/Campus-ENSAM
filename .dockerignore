@@ -1,0 +1,8 @@
+node_modules
+dist
+.git
+.env
+**/__pycache__
+public/qr-codes
+*.rar
+*.zip
