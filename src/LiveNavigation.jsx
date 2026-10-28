@@ -9,10 +9,31 @@ import {
   levelRun,
   parseViewBox,
   createStepDetector,
+  routeMeters,
+  snapGps,
+  gpsToMap,
 } from './navMath.js';
 
 const DEMO_SPEED_MPS = 5;
 const MOTION_TIMEOUT_MS = 3500;
+// GPS drives the position outdoors when the fix is good; the accelerometer covers the rest
+const GPS_MAX_ACCURACY_M = 30; // fixes less precise than this fall back to the accelerometer
+const GPS_MAX_OFF_M = 30; // farther than this from the route = off route
+const GPS_JITTER_M = 6; // don't move the user backwards along the route for less than this
+const GPS_STALE_MS = 8000;
+
+let geoNet = null;
+function loadGeo() {
+  if (!geoNet) {
+    geoNet = fetch('/api/geo')
+      .then((r) => r.json())
+      .catch(() => {
+        geoNet = null;
+        return null;
+      });
+  }
+  return geoNet;
+}
 
 // iOS only grants motion sensors from a user tap, so AdminChat calls this from the "send" tap;
 // the route then waits on the answer before listening to the accelerometer.
@@ -74,6 +95,33 @@ function usePlan(level) {
   return { plan: done.error || !done.file ? null : done, error: !!done.error || !done.file };
 }
 
+/** Eases a map point so the GPS dot glides between fixes. */
+function useSmoothPoint(target) {
+  const [p, setP] = useState(target);
+  const cur = useRef(target);
+  useEffect(() => {
+    if (!target || !cur.current) {
+      cur.current = target;
+      setP(target);
+      return;
+    }
+    let raf = 0;
+    let last = performance.now();
+    const tick = (now) => {
+      const dt = Math.min(now - last, 64);
+      last = now;
+      const k = 1 - Math.exp(-dt / 250);
+      const c = cur.current;
+      cur.current = { ...target, x: c.x + (target.x - c.x) * k, y: c.y + (target.y - c.y) * k };
+      setP(cur.current);
+      if (Math.hypot(target.x - cur.current.x, target.y - cur.current.y) > 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target?.x, target?.y, target?.r]); // eslint-disable-line react-hooks/exhaustive-deps
+  return p;
+}
+
 /** Eases a path parameter t (node index + progress) so the marker glides instead of jumping. */
 function useSmoothT(target) {
   const [t, setT] = useState(target);
@@ -125,12 +173,14 @@ function dist(a, b) {
 }
 
 
-function LiveMap({ meta, target, t }) {
+function LiveMap({ meta, target, gpsPoint, t }) {
   const last = meta.length - 1;
   const tt = useSmoothT(target);
   const pos = tToPos(tt, last);
-  const me = pointAt(pos, meta);
   const level = meta[pos.index].mapLevel;
+  const routeMe = pointAt(pos, meta);
+  const gpsMe = useSmoothPoint(gpsPoint && gpsPoint.mapLevel === level ? gpsPoint : null);
+  const me = gpsMe || routeMe; // real GPS position outdoors, position along the route elsewhere
   const { plan, error } = usePlan(level);
 
   const containerRef = useRef(null);
@@ -223,8 +273,8 @@ function LiveMap({ meta, target, t }) {
   if (!plan) return <div style={styles.mapMsg}>{t.loadingMap}</div>;
 
   const run = levelRun(meta, pos.index);
-  const ahead = [me, ...meta.slice(pos.index + 1, run.end + 1)];
-  const behind = [...meta.slice(run.start, pos.index + 1), me];
+  const ahead = [routeMe, ...meta.slice(pos.index + 1, run.end + 1)];
+  const behind = [...meta.slice(run.start, pos.index + 1), routeMe];
   const pts = (arr) => arr.map((p) => `${p.x},${p.y}`).join(' ');
   const endsHere = run.end === last; // destination is on this map
   const exitNode = meta[run.end];
@@ -339,6 +389,11 @@ function LiveMap({ meta, target, t }) {
             </g>
           )}
 
+          {/* GPS accuracy */}
+          {gpsMe && (
+            <circle cx={gpsMe.x} cy={gpsMe.y} r={gpsMe.r} fill="#1D6FD1" fillOpacity="0.12" stroke="#1D6FD1" strokeOpacity="0.35" strokeWidth={1.5 * u} />
+          )}
+
           {/* you are here */}
           {me && (
             <g transform={`translate(${me.x},${me.y}) scale(${u})`}>
@@ -367,6 +422,13 @@ export default function LiveRoute({ route, t, onPositionChange, onArrived }) {
   const [auto, setAuto] = useState(true); // step tracking is always on
   const [demo, setDemo] = useState(false);
   const [motionMsg, setMotionMsg] = useState('');
+  const [fix, setFix] = useState(null); // last GPS fix { lat, lon, acc, at }
+  const [gpsDenied, setGpsDenied] = useState(false);
+  const [geo, setGeo] = useState(null);
+  const [, setTick] = useState(0);
+  const posRef = useRef(pos);
+  posRef.current = pos;
+  const hasGeo = meta.some((m) => m.geo);
 
   const arrived = pos.index >= last;
   const advance = useCallback((m) => setPos((p) => advancePos(p, m, edgeMeters, last)), [edgeMeters, last]);
@@ -405,12 +467,50 @@ export default function LiveRoute({ route, t, onPositionChange, onArrived }) {
     return () => clearInterval(id);
   }, [demo, advance]);
 
+  // ---- GPS on the outdoor stretches (nodes with coordinates in data/geo.json) ----
+  useEffect(() => {
+    if (!hasGeo || arrived || !navigator.geolocation) return;
+    loadGeo().then(setGeo);
+    const id = navigator.geolocation.watchPosition(
+      ({ coords }) => {
+        setGpsDenied(false);
+        setFix({ lat: coords.latitude, lon: coords.longitude, acc: coords.accuracy, at: Date.now() });
+      },
+      (err) => err.code === 1 && setGpsDenied(true),
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
+    );
+    const tick = setInterval(() => setTick((n) => n + 1), 2000); // notice when fixes stop coming
+    return () => {
+      navigator.geolocation.clearWatch(id);
+      clearInterval(tick);
+    };
+  }, [hasGeo, arrived]);
+
+  const outdoorHere = !!meta[pos.index].geo;
+  const gpsFresh = fix && Date.now() - fix.at < GPS_STALE_MS;
+  const gpsLive = outdoorHere && gpsFresh && fix.acc <= GPS_MAX_ACCURACY_M;
+  const gpsLiveRef = useRef(false);
+  gpsLiveRef.current = gpsLive;
+  const snap = gpsLive ? snapGps(fix.lat, fix.lon, meta, pos.index, { ahead: 6 }) : null;
+  const offRoute = gpsLive && (!snap || snap.offM > Math.max(GPS_MAX_OFF_M, fix.acc));
+  const g = gpsLive && geo ? gpsToMap(fix.lat, fix.lon, geo) : null;
+  const gpsPoint = g ? { x: g.x, y: g.y, r: fix.acc * g.unitsPerM, mapLevel: g.mapLevel } : null;
+
+  // outdoors with a good fix, GPS sets the progress along the route (the accelerometer is ignored)
+  useEffect(() => {
+    if (!snap || offRoute) return;
+    const cur = posRef.current;
+    const delta = routeMeters(snap.pos, edgeMeters) - routeMeters(cur, edgeMeters);
+    if (delta < 0 && -delta < GPS_JITTER_M) return;
+    setPos(snap.pos.index >= last ? { index: last, progress: 0 } : snap.pos);
+  }, [fix]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // step counting with the phone's accelerometer (on by default)
   useEffect(() => {
     if (!auto) return;
     let alive = true;
     let timer = 0;
-    const feed = createStepDetector(() => advance(STEP_LENGTH_M));
+    const feed = createStepDetector(() => !gpsLiveRef.current && advance(STEP_LENGTH_M));
     let gotEvent = false;
     const onMotion = (e) => {
       const a = e.accelerationIncludingGravity;
@@ -468,10 +568,26 @@ export default function LiveRoute({ route, t, onPositionChange, onArrived }) {
         </div>
       </div>
 
-      <LiveMap meta={meta} target={posToT(pos)} t={t} />
+      <LiveMap meta={meta} target={posToT(pos)} gpsPoint={gpsPoint} t={t} />
+
+      {/* GPS status on the outdoor stretches */}
+      {hasGeo && outdoorHere && !arrived && (
+        <div style={{ ...styles.gps, ...(gpsLive && !offRoute ? styles.gpsOk : null) }}>
+          📍{' '}
+          {gpsDenied
+            ? t.gpsDenied
+            : !gpsFresh
+              ? t.gpsWait
+              : !gpsLive
+                ? t.gpsWeak(Math.round(fix.acc))
+                : offRoute
+                  ? t.gpsOffRoute
+                  : t.gpsOk(Math.round(fix.acc))}
+        </div>
+      )}
 
       {/* sensor unavailable: explain, and keep a simulated walk for presentations */}
-      {motionMsg && !arrived && (
+      {motionMsg && !arrived && !gpsLive && (
         <div style={styles.warn}>
           <div>{motionMsg}</div>
           <button style={{ ...styles.chip, ...(demo ? styles.chipOn : null), marginTop: 8 }} onClick={() => setDemo((d) => !d)}>
@@ -588,5 +704,7 @@ const styles = {
     cursor: 'pointer',
   },
   chipOn: { background: 'oklch(0.5 0.15 258)', color: '#fff', border: '1px solid oklch(0.5 0.15 258)' },
+  gps: { marginTop: 8, fontSize: 13, lineHeight: 1.4, color: '#9A5A00', background: '#FFF1DC', borderRadius: 10, padding: '8px 12px' },
+  gpsOk: { color: '#1f7a45', background: '#E6F6EC' },
   warn: { marginTop: 10, fontSize: 13, lineHeight: 1.45, color: '#9A5A00', background: '#FFF1DC', borderRadius: 10, padding: '10px 12px' },
 };

@@ -84,3 +84,78 @@ export function createStepDetector(onStep, { threshold = 1.2, minIntervalMs = 30
     prev = smooth;
   };
 }
+
+/** Distance in metres from the start of the route to `pos`. */
+export function routeMeters(pos, edgeMeters) {
+  let m = 0;
+  for (let i = 0; i < pos.index; i++) m += edgeMeters[i] ?? 0;
+  return m + (edgeMeters[pos.index] ?? 0) * pos.progress;
+}
+
+const EARTH_R = 6371000;
+/** Local metres (east, north) of [lat, lon] around an origin [lat0, lon0]. */
+function toLocal([lat, lon], [lat0, lon0]) {
+  const k = Math.PI / 180;
+  return { x: (lon - lon0) * k * EARTH_R * Math.cos(lat0 * k), y: (lat - lat0) * k * EARTH_R };
+}
+
+/**
+ * Snap a GPS fix onto the route. Only works on outdoor stretches (both ends of a segment need
+ * `geo`), from one segment behind `index` to a few ahead. Returns { pos, offM } or null.
+ */
+export function snapGps(lat, lon, meta, index, { back = 1, ahead = 4 } = {}) {
+  if (!meta[index]?.geo || !meta[index + 1]?.geo) return null;
+  let best = null;
+  for (let i = Math.max(0, index - back); i < Math.min(meta.length - 1, index + ahead + 1); i++) {
+    const a = meta[i].geo;
+    const b = meta[i + 1].geo;
+    if (!a || !b) {
+      if (i > index) break; // stop at the first indoor segment ahead
+      continue;
+    }
+    const p = toLocal([lat, lon], a);
+    const q = toLocal(b, a);
+    const len2 = q.x * q.x + q.y * q.y;
+    const f = len2 ? clamp((p.x * q.x + p.y * q.y) / len2, 0, 1) : 0;
+    const offM = Math.hypot(p.x - q.x * f, p.y - q.y * f);
+    if (!best || offM < best.offM) {
+      best = { pos: f >= 1 ? { index: i + 1, progress: 0 } : { index: i, progress: f }, offM };
+    }
+  }
+  return best;
+}
+
+/**
+ * Place a GPS fix on the map: find the nearest outdoor path (geo.edges), keep the position
+ * along it and the sideways offset, so the dot follows the drawn paths and shows real detours.
+ * geo = { nodes: { id: { geo: [lat, lon], x, y, mapLevel } }, edges: [[a, b], ...] }
+ * Returns { x, y, mapLevel, offM, unitsPerM } or null.
+ */
+export function gpsToMap(lat, lon, geo) {
+  let best = null;
+  for (const [ida, idb] of geo.edges) {
+    const A = geo.nodes[ida];
+    const B = geo.nodes[idb];
+    const p = toLocal([lat, lon], A.geo);
+    const q = toLocal(B.geo, A.geo);
+    const lenM = Math.hypot(q.x, q.y);
+    if (lenM < 0.5) continue;
+    const f = clamp((p.x * q.x + p.y * q.y) / (lenM * lenM), 0, 1);
+    const offM = Math.hypot(p.x - q.x * f, p.y - q.y * f);
+    if (best && offM >= best.offM) continue;
+    const side = (q.x * p.y - q.y * p.x) / lenM; // metres to the left of A->B
+    const mx = B.x - A.x;
+    const my = B.y - A.y;
+    const lenMap = Math.hypot(mx, my);
+    const k = lenMap / lenM; // map units per metre on this path
+    best = {
+      // map y points down, so "left" of (mx, my) is (my, -mx)
+      x: A.x + mx * f + (my / lenMap) * side * k,
+      y: A.y + my * f - (mx / lenMap) * side * k,
+      mapLevel: A.mapLevel,
+      offM,
+      unitsPerM: k,
+    };
+  }
+  return best;
+}
