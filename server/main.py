@@ -26,6 +26,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 EXCEL_PATH = Path(os.getenv("EXCEL_PATH", BASE_DIR / "data" / "Book_4.xlsx"))
+GEO_PATH = Path(os.getenv("GEO_PATH", BASE_DIR / "data" / "geo.json"))
 DIST_DIR = BASE_DIR / "dist"
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
@@ -52,6 +53,9 @@ edges_df = pd.read_excel(EXCEL_PATH, sheet_name="Edges")
 nodes_df = pd.read_excel(EXCEL_PATH, sheet_name="Nodes")
 locations_df = pd.read_excel(EXCEL_PATH, sheet_name="Locations")
 floors_df = pd.read_excel(EXCEL_PATH, sheet_name="Floors")
+
+# GPS coordinates [lat, lon] of the outdoor nodes (optional): the phone uses GPS on these stretches
+GEO = json.loads(GEO_PATH.read_text(encoding="utf-8")) if GEO_PATH.exists() else {}
 
 G = nx.Graph()
 for _, row in edges_df.iterrows():
@@ -119,6 +123,7 @@ def node_meta(node_id: str) -> dict:
         "numFloors": fl["num_floors"] if fl else 1,
         "x": x,
         "y": y,
+        "geo": GEO.get(node_id),
     }
 
 
@@ -349,6 +354,18 @@ def get_floorplan(level: str):
             x, y = to_doc(n["x"], n["y"])
             nodes_out.append({"id": nid, "x": x, "y": y})
     return {"file": file, "viewBox": REAL_VIEWBOX, "nodes": nodes_out}
+
+
+@app.get("/api/geo")
+def get_geo():
+    """Outdoor nodes with GPS coordinates and the paths between them, to place a GPS fix on the map."""
+    nodes = {}
+    for nid, latlon in GEO.items():
+        if nid in NODE:
+            m = node_meta(nid)
+            nodes[nid] = {"geo": latlon, "x": m["x"], "y": m["y"], "mapLevel": m["mapLevel"]}
+    edges = sorted({tuple(sorted((a, b))) for a, b in G.edges() if a in nodes and b in nodes})
+    return {"nodes": nodes, "edges": edges}
 
 
 @app.get("/api/health")

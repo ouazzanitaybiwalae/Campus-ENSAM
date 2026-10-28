@@ -9,9 +9,44 @@ import {
   levelRun,
   parseViewBox,
   createStepDetector,
+  routeMeters,
+  snapGps,
+  gpsToMap,
 } from './navMath.js';
 
 const DEMO_SPEED_MPS = 5;
+const MOTION_TIMEOUT_MS = 3500;
+// GPS drives the position outdoors when the fix is good; the accelerometer covers the rest
+const GPS_MAX_ACCURACY_M = 30; // fixes less precise than this fall back to the accelerometer
+const GPS_MAX_OFF_M = 30; // farther than this from the route = off route
+const GPS_JITTER_M = 6; // don't move the user backwards along the route for less than this
+const GPS_STALE_MS = 8000;
+
+let geoNet = null;
+function loadGeo() {
+  if (!geoNet) {
+    geoNet = fetch('/api/geo')
+      .then((r) => r.json())
+      .catch(() => {
+        geoNet = null;
+        return null;
+      });
+  }
+  return geoNet;
+}
+
+// iOS only grants motion sensors from a user tap, so AdminChat calls this from the "send" tap;
+// the route then waits on the answer before listening to the accelerometer.
+let motionReady = null;
+export function requestMotionPermission() {
+  const DME = typeof DeviceMotionEvent !== 'undefined' ? DeviceMotionEvent : null;
+  if (DME && typeof DME.requestPermission === 'function') {
+    motionReady = DME.requestPermission().then((r) => r === 'granted').catch(() => false);
+  } else {
+    motionReady = Promise.resolve(true);
+  }
+  return motionReady;
+}
 const MIN_ZOOM = 0.8;
 const MAX_ZOOM = 8;
 const FOLLOW_ZOOM = 3.5;
@@ -58,6 +93,33 @@ function usePlan(level) {
   }, [level]);
   if (!done) return { plan: null, error: false };
   return { plan: done.error || !done.file ? null : done, error: !!done.error || !done.file };
+}
+
+/** Eases a map point so the GPS dot glides between fixes. */
+function useSmoothPoint(target) {
+  const [p, setP] = useState(target);
+  const cur = useRef(target);
+  useEffect(() => {
+    if (!target || !cur.current) {
+      cur.current = target;
+      setP(target);
+      return;
+    }
+    let raf = 0;
+    let last = performance.now();
+    const tick = (now) => {
+      const dt = Math.min(now - last, 64);
+      last = now;
+      const k = 1 - Math.exp(-dt / 250);
+      const c = cur.current;
+      cur.current = { ...target, x: c.x + (target.x - c.x) * k, y: c.y + (target.y - c.y) * k };
+      setP(cur.current);
+      if (Math.hypot(target.x - cur.current.x, target.y - cur.current.y) > 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [target?.x, target?.y, target?.r]); // eslint-disable-line react-hooks/exhaustive-deps
+  return p;
 }
 
 /** Eases a path parameter t (node index + progress) so the marker glides instead of jumping. */
@@ -111,12 +173,14 @@ function dist(a, b) {
 }
 
 
-function LiveMap({ meta, target, t }) {
+function LiveMap({ meta, target, gpsPoint, t }) {
   const last = meta.length - 1;
   const tt = useSmoothT(target);
   const pos = tToPos(tt, last);
-  const me = pointAt(pos, meta);
   const level = meta[pos.index].mapLevel;
+  const routeMe = pointAt(pos, meta);
+  const gpsMe = useSmoothPoint(gpsPoint && gpsPoint.mapLevel === level ? gpsPoint : null);
+  const me = gpsMe || routeMe; // real GPS position outdoors, position along the route elsewhere
   const { plan, error } = usePlan(level);
 
   const containerRef = useRef(null);
@@ -209,8 +273,8 @@ function LiveMap({ meta, target, t }) {
   if (!plan) return <div style={styles.mapMsg}>{t.loadingMap}</div>;
 
   const run = levelRun(meta, pos.index);
-  const ahead = [me, ...meta.slice(pos.index + 1, run.end + 1)];
-  const behind = [...meta.slice(run.start, pos.index + 1), me];
+  const ahead = [routeMe, ...meta.slice(pos.index + 1, run.end + 1)];
+  const behind = [...meta.slice(run.start, pos.index + 1), routeMe];
   const pts = (arr) => arr.map((p) => `${p.x},${p.y}`).join(' ');
   const endsHere = run.end === last; // destination is on this map
   const exitNode = meta[run.end];
@@ -325,6 +389,11 @@ function LiveMap({ meta, target, t }) {
             </g>
           )}
 
+          {/* GPS accuracy */}
+          {gpsMe && (
+            <circle cx={gpsMe.x} cy={gpsMe.y} r={gpsMe.r} fill="#1D6FD1" fillOpacity="0.12" stroke="#1D6FD1" strokeOpacity="0.35" strokeWidth={1.5 * u} />
+          )}
+
           {/* you are here */}
           {me && (
             <g transform={`translate(${me.x},${me.y}) scale(${u})`}>
@@ -350,10 +419,16 @@ export default function LiveRoute({ route, t, onPositionChange, onArrived }) {
   const last = path.length - 1;
 
   const [pos, setPos] = useState({ index: 0, progress: 0 });
-  const [auto, setAuto] = useState(false);
+  const [auto, setAuto] = useState(true); // step tracking is always on
   const [demo, setDemo] = useState(false);
   const [motionMsg, setMotionMsg] = useState('');
-  const [showAll, setShowAll] = useState(false);
+  const [fix, setFix] = useState(null); // last GPS fix { lat, lon, acc, at }
+  const [gpsDenied, setGpsDenied] = useState(false);
+  const [geo, setGeo] = useState(null);
+  const [, setTick] = useState(0);
+  const posRef = useRef(pos);
+  posRef.current = pos;
+  const hasGeo = meta.some((m) => m.geo);
 
   const arrived = pos.index >= last;
   const advance = useCallback((m) => setPos((p) => advancePos(p, m, edgeMeters, last)), [edgeMeters, last]);
@@ -392,47 +467,73 @@ export default function LiveRoute({ route, t, onPositionChange, onArrived }) {
     return () => clearInterval(id);
   }, [demo, advance]);
 
-  // automatic mode: step counting with the phone's accelerometer
+  // ---- GPS on the outdoor stretches (nodes with coordinates in data/geo.json) ----
+  useEffect(() => {
+    if (!hasGeo || arrived || !navigator.geolocation) return;
+    loadGeo().then(setGeo);
+    const id = navigator.geolocation.watchPosition(
+      ({ coords }) => {
+        setGpsDenied(false);
+        setFix({ lat: coords.latitude, lon: coords.longitude, acc: coords.accuracy, at: Date.now() });
+      },
+      (err) => err.code === 1 && setGpsDenied(true),
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
+    );
+    const tick = setInterval(() => setTick((n) => n + 1), 2000); // notice when fixes stop coming
+    return () => {
+      navigator.geolocation.clearWatch(id);
+      clearInterval(tick);
+    };
+  }, [hasGeo, arrived]);
+
+  const outdoorHere = !!meta[pos.index].geo;
+  const gpsFresh = fix && Date.now() - fix.at < GPS_STALE_MS;
+  const gpsLive = outdoorHere && gpsFresh && fix.acc <= GPS_MAX_ACCURACY_M;
+  const gpsLiveRef = useRef(false);
+  gpsLiveRef.current = gpsLive;
+  const snap = gpsLive ? snapGps(fix.lat, fix.lon, meta, pos.index, { ahead: 6 }) : null;
+  const offRoute = gpsLive && (!snap || snap.offM > Math.max(GPS_MAX_OFF_M, fix.acc));
+  const g = gpsLive && geo ? gpsToMap(fix.lat, fix.lon, geo) : null;
+  const gpsPoint = g ? { x: g.x, y: g.y, r: fix.acc * g.unitsPerM, mapLevel: g.mapLevel } : null;
+
+  // outdoors with a good fix, GPS sets the progress along the route (the accelerometer is ignored)
+  useEffect(() => {
+    if (!snap || offRoute) return;
+    const cur = posRef.current;
+    const delta = routeMeters(snap.pos, edgeMeters) - routeMeters(cur, edgeMeters);
+    if (delta < 0 && -delta < GPS_JITTER_M) return;
+    setPos(snap.pos.index >= last ? { index: last, progress: 0 } : snap.pos);
+  }, [fix]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // step counting with the phone's accelerometer (on by default)
   useEffect(() => {
     if (!auto) return;
+    let alive = true;
+    let timer = 0;
+    const feed = createStepDetector(() => !gpsLiveRef.current && advance(STEP_LENGTH_M));
     let gotEvent = false;
-    const feed = createStepDetector(() => advance(STEP_LENGTH_M));
     const onMotion = (e) => {
       const a = e.accelerationIncludingGravity;
       if (!a || a.x == null) return;
       gotEvent = true;
       feed(Math.hypot(a.x, a.y, a.z), performance.now());
     };
-    window.addEventListener('devicemotion', onMotion);
-    const timer = setTimeout(() => {
-      if (!gotEvent) {
-        setMotionMsg(t.motionNone);
-        setAuto(false);
-      }
-    }, 3500);
+    const stop = (msg) => {
+      setMotionMsg(msg);
+      setAuto(false);
+    };
+    (motionReady || Promise.resolve(true)).then((granted) => {
+      if (!alive) return;
+      if (!granted) return stop(t.motionDenied);
+      window.addEventListener('devicemotion', onMotion);
+      timer = setTimeout(() => !gotEvent && stop(t.motionNone), MOTION_TIMEOUT_MS);
+    });
     return () => {
+      alive = false;
       window.removeEventListener('devicemotion', onMotion);
       clearTimeout(timer);
     };
-  }, [auto, advance, t.motionNone]);
-
-  async function toggleAuto() {
-    setMotionMsg('');
-    if (auto) return setAuto(false);
-    try {
-      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-        const r = await DeviceMotionEvent.requestPermission(); // iOS: must come from a tap
-        if (r !== 'granted') return setMotionMsg(t.motionDenied);
-      }
-      setDemo(false);
-      setAuto(true);
-    } catch {
-      setMotionMsg(t.motionDenied);
-    }
-  }
-
-  const goNext = () => setPos((p) => ({ index: Math.min(p.index + 1, last), progress: 0 }));
-  const goPrev = () => setPos((p) => (p.progress > 0 ? { index: p.index, progress: 0 } : { index: Math.max(p.index - 1, 0), progress: 0 }));
+  }, [auto, advance, t.motionNone, t.motionDenied]);
 
   const cur = meta[pos.index];
   const hint = stairsHint(cur, meta[pos.index + 1], t);
@@ -463,71 +564,68 @@ export default function LiveRoute({ route, t, onPositionChange, onArrived }) {
           <div style={{ ...styles.progressBar, width: `${pct}%`, background: arrived ? '#2e9e5b' : '#1D6FD1' }} />
         </div>
         <div style={{ fontSize: 11.5, color: 'oklch(0.5 0.02 258)', marginTop: 4 }}>
-          {arrived ? '' : `≈ ${remainingM} m ${t.remaining} · ${t.step} ${Math.min(pos.index + 1, last)}/${last}`}
+          {arrived ? '' : `≈ ${remainingM} m ${t.remaining} · ${t.step} ${pos.index + 2}/${steps.length}`}
         </div>
       </div>
 
-      <LiveMap meta={meta} target={posToT(pos)} t={t} />
+      <LiveMap meta={meta} target={posToT(pos)} gpsPoint={gpsPoint} t={t} />
 
-      {/* controls */}
-      <div style={styles.controls}>
-        <button style={styles.ghost} onClick={goPrev} disabled={pos.index === 0 && pos.progress === 0}>
-          ◀ {t.prev}
-        </button>
-        <button style={styles.primary} onClick={goNext} disabled={arrived}>
-          {t.next} ▶
-        </button>
-      </div>
-      <div style={{ ...styles.controls, marginTop: 6 }}>
-        <button style={{ ...styles.chip, ...(auto ? styles.chipOn : null) }} onClick={toggleAuto} disabled={arrived}>
-          {t.autoSteps}
-        </button>
-        <button
-          style={{ ...styles.chip, ...(demo ? styles.chipOn : null) }}
-          onClick={() => {
-            setAuto(false);
-            setDemo((d) => !d);
-          }}
-          disabled={arrived}
-        >
-          {demo ? '⏸' : '▶'} {t.demo}
-        </button>
-        <button style={styles.chip} onClick={() => setShowAll((s) => !s)}>
-          {showAll ? t.hideSteps : t.allSteps}
-        </button>
-      </div>
-      {motionMsg && <div style={styles.warn}>{motionMsg}</div>}
-
-      {showAll && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
-          {steps.map((text, i) => {
-            const state = i <= pos.index ? 'done' : i === pos.index + 1 ? 'current' : 'todo';
-            return (
-              <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', opacity: state === 'done' ? 0.45 : 1 }}>
-                <div
-                  style={{
-                    width: 20,
-                    height: 20,
-                    borderRadius: '50%',
-                    flex: 'none',
-                    marginTop: 1,
-                    fontSize: 11,
-                    fontWeight: 700,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    background: state === 'current' ? '#1D6FD1' : 'oklch(0.94 0.03 258)',
-                    color: state === 'current' ? '#fff' : 'oklch(0.45 0.13 258)',
-                  }}
-                >
-                  {state === 'done' ? '✓' : i + 1}
-                </div>
-                <div style={{ fontSize: 14, lineHeight: 1.5, fontWeight: state === 'current' ? 600 : 400 }}>{text}</div>
-              </div>
-            );
-          })}
+      {/* GPS status on the outdoor stretches */}
+      {hasGeo && outdoorHere && !arrived && (
+        <div style={{ ...styles.gps, ...(gpsLive && !offRoute ? styles.gpsOk : null) }}>
+          📍{' '}
+          {gpsDenied
+            ? t.gpsDenied
+            : !gpsFresh
+              ? t.gpsWait
+              : !gpsLive
+                ? t.gpsWeak(Math.round(fix.acc))
+                : offRoute
+                  ? t.gpsOffRoute
+                  : t.gpsOk(Math.round(fix.acc))}
         </div>
       )}
+
+      {/* sensor unavailable: explain, and keep a simulated walk for presentations */}
+      {motionMsg && !arrived && !gpsLive && (
+        <div style={styles.warn}>
+          <div>{motionMsg}</div>
+          <button style={{ ...styles.chip, ...(demo ? styles.chipOn : null), marginTop: 8 }} onClick={() => setDemo((d) => !d)}>
+            {demo ? '⏸' : '▶'} {t.demo}
+          </button>
+        </div>
+      )}
+
+      {/* all directions, always visible */}
+      <div style={styles.stepsTitle}>{t.stepsTitle}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {steps.map((text, i) => {
+          const state = i <= pos.index ? 'done' : i === pos.index + 1 ? 'current' : 'todo';
+          return (
+            <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', opacity: state === 'done' ? 0.45 : 1 }}>
+              <div
+                style={{
+                  width: 22,
+                  height: 22,
+                  borderRadius: '50%',
+                  flex: 'none',
+                  marginTop: 1,
+                  fontSize: 11.5,
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: state === 'current' ? '#1D6FD1' : 'oklch(0.94 0.03 258)',
+                  color: state === 'current' ? '#fff' : 'oklch(0.45 0.13 258)',
+                }}
+              >
+                {state === 'done' ? '✓' : i + 1}
+              </div>
+              <div style={{ fontSize: 15, lineHeight: 1.5, fontWeight: state === 'current' ? 600 : 400 }}>{text}</div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -537,7 +635,7 @@ const styles = {
   mapBox: {
     position: 'relative',
     width: '100%',
-    height: 'min(60vh, 560px)',
+    height: 'min(52vh, 520px)',
     overflow: 'hidden',
     background: 'oklch(0.97 0.008 258)',
     border: '1px solid oklch(0.88 0.015 258)',
@@ -548,9 +646,9 @@ const styles = {
   mapMsg: { padding: 16, fontSize: 13, color: '#888' },
   zoomCol: { position: 'absolute', top: 10, right: 10, zIndex: 10, display: 'flex', flexDirection: 'column', gap: 6 },
   mapBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
+    width: 40,
+    height: 40,
+    borderRadius: 10,
     border: '1px solid #ccc',
     background: '#fff',
     fontWeight: 700,
@@ -594,28 +692,7 @@ const styles = {
   },
   progressTrack: { height: 5, borderRadius: 3, background: 'oklch(0.9 0.015 258)', marginTop: 10, overflow: 'hidden' },
   progressBar: { height: '100%', borderRadius: 3, transition: 'width .3s' },
-  controls: { display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap' },
-  primary: {
-    flex: 1,
-    border: 'none',
-    borderRadius: 10,
-    background: 'oklch(0.5 0.15 258)',
-    color: '#fff',
-    fontWeight: 600,
-    fontSize: 14,
-    padding: '11px 14px',
-    cursor: 'pointer',
-  },
-  ghost: {
-    border: '1px solid oklch(0.85 0.02 258)',
-    borderRadius: 10,
-    background: '#fff',
-    color: 'oklch(0.35 0.08 258)',
-    fontWeight: 600,
-    fontSize: 14,
-    padding: '11px 14px',
-    cursor: 'pointer',
-  },
+  stepsTitle: { fontSize: 13, fontWeight: 700, color: 'oklch(0.4 0.05 258)', textTransform: 'uppercase', letterSpacing: 0.5, margin: '16px 0 10px' },
   chip: {
     border: '1px solid oklch(0.88 0.03 258)',
     borderRadius: 20,
@@ -627,5 +704,7 @@ const styles = {
     cursor: 'pointer',
   },
   chipOn: { background: 'oklch(0.5 0.15 258)', color: '#fff', border: '1px solid oklch(0.5 0.15 258)' },
-  warn: { marginTop: 8, fontSize: 12.5, color: '#9A5A00', background: '#FFF1DC', borderRadius: 8, padding: '6px 10px' },
+  gps: { marginTop: 8, fontSize: 13, lineHeight: 1.4, color: '#9A5A00', background: '#FFF1DC', borderRadius: 10, padding: '8px 12px' },
+  gpsOk: { color: '#1f7a45', background: '#E6F6EC' },
+  warn: { marginTop: 10, fontSize: 13, lineHeight: 1.45, color: '#9A5A00', background: '#FFF1DC', borderRadius: 10, padding: '10px 12px' },
 };
