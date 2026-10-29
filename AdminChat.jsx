@@ -20,7 +20,7 @@ const TRANSLATIONS = {
     bot: 'Campus Navigator',
     outdoor: 'Extérieur',
     floor: 'Étage',
-    groundFloor: 'RDC',
+    groundFloor: 'rez-de-chaussée',
     youAreHere: 'Vous êtes ici',
     step: 'Étape',
     remaining: 'restants',
@@ -32,9 +32,13 @@ const TRANSLATIONS = {
     gpsWait: 'Recherche du signal GPS… (le podomètre prend le relais en attendant)',
     gpsWeak: (m) => `GPS imprécis (±${m} m) : suivi par le podomètre`,
     gpsOffRoute: "Vous vous éloignez de l'itinéraire",
+    rerouting: "Recalcul de l'itinéraire depuis le point le plus proche…",
+    rerouted: "Itinéraire recalculé depuis votre position",
+    rerouteBtn: "Recalculer l'itinéraire",
+    rerouteFailed: "Impossible de recalculer l'itinéraire pour l'instant.",
     gpsDenied: 'Localisation refusée : autorisez-la pour ce site dans les réglages du navigateur, puis rechargez la page.',
-    stairsUp: (b, f) => `Montez l'escalier de ${b} jusqu'à : ${f}`,
-    stairsDown: (b, f) => `Descendez l'escalier de ${b} jusqu'à : ${f}`,
+    stairsUp: (b, f) => `Montez l'escalier jusqu'au niveau : ${f}`,
+    stairsDown: (b, f) => `Descendez l'escalier jusqu'au niveau : ${f}`,
     motionDenied: "L'accès aux capteurs de mouvement a été refusé : le point ne peut pas suivre vos pas. Autorisez-le dans les réglages du navigateur, puis relancez l'itinéraire.",
     motionNone: "Aucun capteur de mouvement détecté sur cet appareil (ou la page n'est pas servie en HTTPS) : le point ne peut pas suivre vos pas.",
     resumeTitle: (d) => `Reprendre l'itinéraire vers « ${d} » depuis ce point ?`,
@@ -82,6 +86,10 @@ const TRANSLATIONS = {
     gpsWait: 'Looking for GPS signal… (step counting in the meantime)',
     gpsWeak: (m) => `GPS imprecise (±${m} m): using step counting`,
     gpsOffRoute: 'You are moving away from the route',
+    rerouting: 'Recalculating the route from the nearest point…',
+    rerouted: 'Route recalculated from your position',
+    rerouteBtn: 'Recalculate route',
+    rerouteFailed: 'Could not recalculate the route right now.',
     gpsDenied: 'Location access denied: allow it for this site in your browser settings, then reload the page.',
     stairsUp: (b, f) => `Take the stairs in ${b} up to: ${f}`,
     stairsDown: (b, f) => `Take the stairs in ${b} down to: ${f}`,
@@ -128,13 +136,14 @@ function clearLastRoute() {
 }
 
 // Returns { route } on success or { error: <code> } on failure.
-async function resolveRoute(text, startNode, lang) {
+// destNode (optional) skips destination matching, used to recalculate a route.
+async function resolveRoute(text, startNode, lang, destNode) {
   if (!startNode) return { error: 'no_start' };
   try {
     const res = await fetch('/api/navigate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, startNode, lang }),
+      body: JSON.stringify({ text, startNode, lang, destNode }),
     });
     if (!res.ok) return { error: 'server' };
     const data = await res.json();
@@ -142,6 +151,7 @@ async function resolveRoute(text, startNode, lang) {
     return {
       route: {
         destination: data.destinationName || 'destination',
+        destNode: data.destinationNode,
         path: data.path,
         pathMeta: data.pathMeta,
         edgeMeters: data.edgeMeters,
@@ -217,6 +227,19 @@ export default function AdminChat() {
           : msg
       )
     );
+  }
+
+  // user left the route: new shortest path to the same destination from the nearest outdoor node
+  async function rerouteFrom(msgId, route, fromNode) {
+    const result = await resolveRoute(route.destination, fromNode, lang, route.destNode);
+    if (!result.route) return false;
+    positionRef.current = result.route.path[0];
+    setMessages((m) =>
+      m.map((msg) =>
+        msg.id === msgId ? { ...msg, mapData: { ...result.route, rev: (route.rev || 0) + 1, rerouted: true } } : msg
+      )
+    );
+    return true;
   }
 
   function useSuggestion(s) {
@@ -306,11 +329,12 @@ export default function AdminChat() {
 
                       {msg.mapData && msg.id === activeRouteId && (
                         <LiveRoute
-                          key={msg.id}
+                          key={`${msg.id}-${msg.mapData.rev || 0}`}
                           route={msg.mapData}
                           t={t}
                           onPositionChange={(node) => { positionRef.current = node; }}
                           onArrived={clearLastRoute}
+                          onReroute={(fromNode) => rerouteFrom(msg.id, msg.mapData, fromNode)}
                         />
                       )}
 

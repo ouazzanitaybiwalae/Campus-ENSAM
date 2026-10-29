@@ -99,6 +99,25 @@ function toLocal([lat, lon], [lat0, lon0]) {
   return { x: (lon - lon0) * k * EARTH_R * Math.cos(lat0 * k), y: (lat - lat0) * k * EARTH_R };
 }
 
+/** Ground distance in metres between two [lat, lon] points. */
+export function metersBetween(a, b) {
+  const p = toLocal(a, b);
+  return Math.hypot(p.x, p.y);
+}
+
+/**
+ * Outdoor node (geo.nodes) closest to a GPS fix, as the start of a recalculated route.
+ * Returns { id, distM } or null.
+ */
+export function nearestGeoNode(lat, lon, geo) {
+  let best = null;
+  for (const [id, n] of Object.entries(geo.nodes)) {
+    const distM = metersBetween([lat, lon], n.geo);
+    if (!best || distM < best.distM) best = { id, distM };
+  }
+  return best;
+}
+
 /**
  * Snap a GPS fix onto the route. Only works on outdoor stretches (both ends of a segment need
  * `geo`), from one segment behind `index` to a few ahead. Returns { pos, offM } or null.

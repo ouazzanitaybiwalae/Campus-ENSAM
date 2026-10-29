@@ -12,6 +12,8 @@ import {
   routeMeters,
   snapGps,
   gpsToMap,
+  metersBetween,
+  nearestGeoNode,
 } from './navMath.js';
 
 const DEMO_SPEED_MPS = 5;
@@ -21,6 +23,10 @@ const GPS_MAX_ACCURACY_M = 30; // fixes less precise than this fall back to the 
 const GPS_MAX_OFF_M = 30; // farther than this from the route = off route
 const GPS_JITTER_M = 6; // don't move the user backwards along the route for less than this
 const GPS_STALE_MS = 8000;
+// off route for this long -> recalculate (Dijkstra on the server) from the nearest outdoor node
+const OFF_ROUTE_REROUTE_MS = 6000;
+const REROUTE_COOLDOWN_MS = 20000;
+let lastRerouteAt = 0; // module-level: survives the remount that a new route causes
 
 let geoNet = null;
 function loadGeo() {
@@ -148,14 +154,16 @@ function useSmoothT(target) {
   return t;
 }
 
+const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+
 export function placeLabel(m, t) {
   if (!m) return '';
   if (m.outdoor) return t.outdoor;
   if (m.numFloors > 1) {
     const f = m.floorNumber === 0 ? t.groundFloor : `${t.floor} ${m.floorNumber}`;
-    return `${m.building} · ${f}`;
+    return `${cap(m.building)} · ${f}`;
   }
-  return m.building || '';
+  return cap(m.building || '');
 }
 
 function stairsHint(a, b, t) {
@@ -414,7 +422,7 @@ function LiveMap({ meta, target, gpsPoint, t }) {
 /* Route card (instruction + map + controls)                           */
 /* ------------------------------------------------------------------ */
 
-export default function LiveRoute({ route, t, onPositionChange, onArrived }) {
+export default function LiveRoute({ route, t, onPositionChange, onArrived, onReroute }) {
   const { path, pathMeta: meta, edgeMeters, steps, destination } = route;
   const last = path.length - 1;
 
@@ -425,7 +433,10 @@ export default function LiveRoute({ route, t, onPositionChange, onArrived }) {
   const [fix, setFix] = useState(null); // last GPS fix { lat, lon, acc, at }
   const [gpsDenied, setGpsDenied] = useState(false);
   const [geo, setGeo] = useState(null);
-  const [, setTick] = useState(0);
+  const [tick, setTick] = useState(0);
+  const [rerouting, setRerouting] = useState(false);
+  const [rerouteFailed, setRerouteFailed] = useState(false);
+  const offSince = useRef(0);
   const posRef = useRef(pos);
   posRef.current = pos;
   const hasGeo = meta.some((m) => m.geo);
@@ -492,7 +503,9 @@ export default function LiveRoute({ route, t, onPositionChange, onArrived }) {
   const gpsLiveRef = useRef(false);
   gpsLiveRef.current = gpsLive;
   const snap = gpsLive ? snapGps(fix.lat, fix.lon, meta, pos.index, { ahead: 6 }) : null;
-  const offRoute = gpsLive && (!snap || snap.offM > Math.max(GPS_MAX_OFF_M, fix.acc));
+  // no outdoor segment to snap to (e.g. last node before a building): measure to the current node
+  const offM = !gpsLive ? 0 : snap ? snap.offM : metersBetween([fix.lat, fix.lon], meta[pos.index].geo);
+  const offRoute = gpsLive && offM > Math.max(GPS_MAX_OFF_M, fix.acc);
   const g = gpsLive && geo ? gpsToMap(fix.lat, fix.lon, geo) : null;
   const gpsPoint = g ? { x: g.x, y: g.y, r: fix.acc * g.unitsPerM, mapLevel: g.mapLevel } : null;
 
@@ -504,6 +517,40 @@ export default function LiveRoute({ route, t, onPositionChange, onArrived }) {
     if (delta < 0 && -delta < GPS_JITTER_M) return;
     setPos(snap.pos.index >= last ? { index: last, progress: 0 } : snap.pos);
   }, [fix]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // wrong way: start again from the outdoor node closest to the user
+  const reroute = async () => {
+    if (!fix || !geo || rerouting) return;
+    const near = nearestGeoNode(fix.lat, fix.lon, geo);
+    if (!near) return;
+    lastRerouteAt = Date.now();
+    // the closest node is further along this same route (shortcut): just jump there
+    const k = path.indexOf(near.id, posRef.current.index);
+    if (k >= 0) {
+      setPos(k >= last ? { index: last, progress: 0 } : { index: k, progress: 0 });
+      return;
+    }
+    setRerouting(true);
+    setRerouteFailed(false);
+    const ok = await onReroute?.(near.id); // on success the parent swaps in the new route (remount)
+    if (!ok) {
+      setRerouting(false);
+      setRerouteFailed(true);
+    }
+  };
+
+  // off route for a few seconds -> recalculate automatically
+  useEffect(() => {
+    if (!offRoute || !geo || !onReroute || rerouting) {
+      offSince.current = 0;
+      return;
+    }
+    if (!offSince.current) offSince.current = Date.now();
+    if (Date.now() - offSince.current >= OFF_ROUTE_REROUTE_MS && Date.now() - lastRerouteAt >= REROUTE_COOLDOWN_MS) {
+      offSince.current = 0;
+      reroute();
+    }
+  }, [fix, tick, offRoute, geo, rerouting]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // step counting with the phone's accelerometer (on by default)
   useEffect(() => {
@@ -580,11 +627,23 @@ export default function LiveRoute({ route, t, onPositionChange, onArrived }) {
               ? t.gpsWait
               : !gpsLive
                 ? t.gpsWeak(Math.round(fix.acc))
-                : offRoute
-                  ? t.gpsOffRoute
-                  : t.gpsOk(Math.round(fix.acc))}
+                : rerouting
+                  ? t.rerouting
+                  : offRoute
+                    ? t.gpsOffRoute
+                    : t.gpsOk(Math.round(fix.acc))}
+          {offRoute && !rerouting && onReroute && geo && (
+            <div>
+              {rerouteFailed && <div style={{ marginTop: 4 }}>{t.rerouteFailed}</div>}
+              <button style={{ ...styles.chip, marginTop: 8 }} onClick={reroute}>
+                ↻ {t.rerouteBtn}
+              </button>
+            </div>
+          )}
         </div>
       )}
+
+      {route.rerouted && pos.index === 0 && !offRoute && <div style={{ ...styles.gps, ...styles.gpsOk }}>↻ {t.rerouted}</div>}
 
       {/* sensor unavailable: explain, and keep a simulated walk for presentations */}
       {motionMsg && !arrived && !gpsLive && (

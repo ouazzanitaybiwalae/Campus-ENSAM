@@ -28,7 +28,7 @@ load_dotenv(BASE_DIR / ".env")
 EXCEL_PATH = Path(os.getenv("EXCEL_PATH", BASE_DIR / "data" / "Book_4.xlsx"))
 GEO_PATH = Path(os.getenv("GEO_PATH", BASE_DIR / "data" / "geo.json"))
 DIST_DIR = BASE_DIR / "dist"
-GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 app = FastAPI(title="Campus Navigator")
 app.add_middleware(
@@ -232,43 +232,122 @@ def llm_match(text: str):
 
 
 # Step texts: exactly ONE step per path node (steps[i] = how to reach node i)
-def place_label(meta: dict) -> str:
+
+# Building names as written in French directions (the Excel sheet mixes English and French)
+BUILDING_FR = {
+    "Admin building": "bâtiment administratif",
+    "Dept Electrique": "département électrique",
+    "Atelier": "atelier",
+    "Amphithéâtre": "bâtiment de l'amphithéâtre",
+    "Toillette 1": "toilettes",
+    "Campus Grounds": "extérieur",
+}
+
+
+def building_name(meta: dict, lang: str) -> str:
+    b = meta["building"] or ""
+    return BUILDING_FR.get(b, b) if lang == "fr" else b
+
+
+def floor_name(n, lang: str) -> str:
+    n = n or 0
+    if lang == "en":
+        return "the ground floor" if n == 0 else f"floor {n}"
+    return "rez-de-chaussée" if n == 0 else ("1er étage" if n == 1 else f"{n}e étage")
+
+
+def place_label(meta: dict, lang: str = "fr") -> str:
     if meta["outdoor"]:
-        return "outdoor"
+        return "outside" if lang == "en" else "à l'extérieur"
+    b = building_name(meta, lang)
     if meta["numFloors"] > 1:
-        return f'{meta["building"]}, floor {meta["floorNumber"]}'
-    return meta["building"] or ""
+        return f'{b}, {floor_name(meta["floorNumber"], lang)}'
+    return b
 
 
-def fallback_steps(path, metas, lang):
+def transition(a: dict, b: dict, lang: str):
+    """What changes between two consecutive checkpoints (exit, enter, stairs), or None."""
+    en = lang == "en"
+    if not a["outdoor"] and b["outdoor"]:
+        return "Go outside" if en else "Sortez du bâtiment"
+    if a["outdoor"] and not b["outdoor"]:
+        return f"Enter the {building_name(b, lang)}" if en else f"Entrez dans : {building_name(b, lang)}"
+    if a["building"] != b["building"]:
+        return f"Go into the {building_name(b, lang)}" if en else f"Passez dans : {building_name(b, lang)}"
+    if a["floorNumber"] != b["floorNumber"]:
+        up = (b["floorNumber"] or 0) > (a["floorNumber"] or 0)
+        f = floor_name(b["floorNumber"], lang)
+        if en:
+            return f'Take the stairs {"up" if up else "down"} to {f}'
+        return f'{"Montez" if up else "Descendez"} l\'escalier jusqu\'au {f}'
+    return None
+
+
+def fallback_steps(path, metas, lang, dest_name):
+    en = lang == "en"
     steps = []
     for i, nid in enumerate(path):
         desc = NODE[nid]["description"]
-        if i > 0:
-            a, b = metas[i - 1], metas[i]
-            if not a["outdoor"] and a["building"] == b["building"] and a["floorNumber"] != b["floorNumber"]:
-                up = (b["floorNumber"] or 0) > (a["floorNumber"] or 0)
-                if lang == "en":
-                    desc = f'Take the stairs {"up" if up else "down"} to floor {b["floorNumber"]} — {desc}'
-                else:
-                    desc = f'Prenez l\'escalier pour {"monter" if up else "descendre"} à l\'étage {b["floorNumber"]} — {desc}'
-        steps.append(desc)
+        if i == 0:
+            steps.append(f"You are {place_label(metas[0], lang)} ({desc})." if en else f"Vous êtes {place_label(metas[0], lang)} ({desc}).")
+        elif i == len(path) - 1:
+            steps.append(f"You have arrived: {dest_name}." if en else f"Vous êtes arrivé : {dest_name}.")
+        else:
+            move = transition(metas[i - 1], metas[i], lang) or ("Continue" if en else "Continuez")
+            steps.append(f"{move} ({desc})." if en else f"{move} (repère : {desc}).")
     return steps
 
 
 def clean_step(s: str, lang: str) -> str:
-    return re.sub(r"\bN\d+\b", "a nearby building" if lang == "en" else "un bâtiment voisin", str(s)).strip()
+    s = re.sub(r"\bN\d+\b", "a nearby building" if lang == "en" else "un bâtiment voisin", str(s)).strip()
+    if lang == "fr":
+        s = re.sub(r"\bl'étage 0\b|\bétage 0\b", "rez-de-chaussée", s)
+    return s
 
 
-def build_steps(path, metas, lang):
-    fb = fallback_steps(path, metas, lang)
+STYLE_FR = """Tu rédiges des instructions de guidage à pied, en français, pour des étudiants et visiteurs d'un campus.
+Règles :
+- Français correct et naturel, avec les accents, en vouvoyant. Une seule phrase courte par étape (15 mots maximum).
+- Étape 1 : où se trouve la personne maintenant (« Vous êtes devant… »).
+- Étapes intermédiaires : TOUJOURS une action à l'impératif (Avancez, Continuez, Entrez, Sortez, Traversez, Tournez, Montez, Descendez, Passez devant…) suivie d'un repère visible.
+- Dernière étape : « Vous êtes arrivé : <destination>. » éventuellement avec un repère.
+- Si un changement est indiqué (entrée, sortie, escalier), l'étape DOIT le dire clairement.
+- Ne dis de monter ou descendre un escalier QUE si la ligne contient « changement : Montez/Descendez ». Un escalier cité dans un repère est seulement un repère (« Passez devant l'escalier »).
+- Les notes de repère sont en anglais ou approximatives : traduis-les et reformule-les, ne les recopie pas.
+- N'invente pas « gauche » ou « droite » si la note ne le dit pas clairement.
+- Dis « rez-de-chaussée », jamais « étage 0 ». N'écris jamais « nœud », « node », « jonction », « intersection », « checkpoint » ni de code comme « N109 ».
+Exemple de bon style :
+["Vous êtes devant le bâtiment administratif, près de l'écran.", "Entrez dans le bâtiment administratif et avancez jusqu'à l'écran de télévision.", "Montez l'escalier jusqu'au 1er étage.", "Passez devant la salle B5 et continuez tout droit.", "Vous êtes arrivé : Salle B7."]"""
+
+STYLE_EN = """You write walking directions in English for students and visitors on a campus.
+Rules:
+- One short, clear sentence per step (15 words max).
+- Step 1: where the person is now ("You are in front of…").
+- Middle steps: ALWAYS an imperative action (Walk, Continue, Enter, Go outside, Turn, Take the stairs, Pass…) plus a visible landmark.
+- Last step: "You have arrived: <destination>." optionally with a landmark.
+- If a change is given (enter, exit, stairs), the step MUST say it clearly.
+- Only tell the person to go up or down stairs when the line has "changement: Take the stairs". Stairs mentioned in a note are just a landmark ("Pass the stairs").
+- Rephrase the landmark notes; don't copy them verbatim. Don't invent left/right unless the note clearly says so.
+- Never write "node", "junction", "intersection", "checkpoint" or codes like "N109"."""
+
+
+def build_steps(path, metas, lang, dest_name):
+    fb = fallback_steps(path, metas, lang, dest_name)
     if not groq_client:
         return fb
-    language = "English" if lang == "en" else "French"
-    raw = [
-        f"{i + 1}. [{place_label(metas[i])}] {NODE[nid]['description']}"
-        for i, nid in enumerate(path)
-    ]
+    raw = []
+    for i, nid in enumerate(path):
+        # notes sometimes cite other nodes ("after N96"): name them by role instead of by code
+        note = re.sub(
+            r'"?\b(N\d+)\b"?',
+            lambda m: "the previous checkpoint" if i > 0 and m.group(1) == path[i - 1] else "a nearby spot",
+            NODE[nid]["description"],
+        )
+        line = f"{i + 1}. lieu : {place_label(metas[i], lang)} | repère : {note}"
+        change = transition(metas[i - 1], metas[i], lang) if i > 0 else None
+        if change:
+            line += f" | changement : {change}"
+        raw.append(line)
     try:
         res = groq_client.chat.completions.create(
             model=GROQ_MODEL,
@@ -276,23 +355,25 @@ def build_steps(path, metas, lang):
             messages=[
                 {
                     "role": "system",
-                    "content": (
-                        f"You write short walking directions in {language} from numbered checkpoints. "
-                        f"There are {len(path)} checkpoints. Return EXACTLY {len(path)} steps, in order: "
-                        "step 1 says where the person is now; step k (k>1) says how to get from checkpoint k-1 to checkpoint k "
-                        "(mention stairs when the floor changes). One short sentence each. "
-                        "NEVER use the words 'node', 'junction' or 'intersection'. "
-                        "Never output codes like 'N109'; say 'a nearby building' instead, without inventing names. "
-                        'Return ONLY valid JSON: {"steps": ["...", "..."]}'
-                    ),
+                    "content": (STYLE_EN if lang == "en" else STYLE_FR)
+                    + f"\n\nThere are {len(path)} checkpoints: return EXACTLY {len(path)} steps, in order "
+                    "(step k = how to get from checkpoint k-1 to checkpoint k). "
+                    'Return ONLY valid JSON: {"steps": ["...", "..."]}',
                 },
-                {"role": "user", "content": "Checkpoints:\n" + "\n".join(raw)},
+                {
+                    "role": "user",
+                    "content": f"Destination : {dest_name}\nCheckpoints :\n" + "\n".join(raw),
+                },
             ],
             response_format={"type": "json_object"},
         )
         steps = json.loads(res.choices[0].message.content).get("steps")
         if isinstance(steps, list) and len(steps) == len(path) and all(isinstance(s, str) and s.strip() for s in steps):
-            return [clean_step(s, lang) for s in steps]
+            steps = [clean_step(s, lang) for s in steps]
+            arrived = "You have arrived" if lang == "en" else "Vous êtes arrivé"
+            if not steps[-1].startswith(arrived):
+                steps[-1] = fb[-1]
+            return steps
         print("Groq steps length mismatch, using fallback")
     except Exception as e:
         print("Groq directions error:", e)
@@ -304,6 +385,7 @@ class NavigationRequest(BaseModel):
     text: str
     startNode: str
     lang: str = "fr"
+    destNode: str | None = None  # set when recalculating a route: skips destination matching
 
 
 @app.post("/api/navigate")
@@ -311,7 +393,9 @@ def navigate(req: NavigationRequest):  # sync def -> runs in a worker thread (LL
     if req.startNode not in G or req.startNode not in NODE:
         return {"error": "Point de départ invalide", "code": "bad_start"}
 
-    dest_node = llm_match(req.text)
+    dest_node = req.destNode if req.destNode in G else None
+    if not dest_node:
+        dest_node = llm_match(req.text)
     if not dest_node or dest_node not in G:
         dest_node = local_match(req.text)
     if not dest_node or dest_node not in G:
@@ -321,16 +405,18 @@ def navigate(req: NavigationRequest):  # sync def -> runs in a worker thread (LL
         return {"error": "Vous y êtes déjà", "code": "already_there"}
 
     try:
-        path = nx.shortest_path(G, source=req.startNode, target=dest_node, weight="weight")
+        path = nx.dijkstra_path(G, source=req.startNode, target=dest_node, weight="weight")
     except nx.NetworkXNoPath:
         return {"error": "Aucun chemin trouvé", "code": "no_path"}
 
-    metas = [node_meta(n) for n in path]
-    edge_meters = [G[a][b]["weight"] for a, b in zip(path, path[1:])]
-    steps = build_steps(path, metas, req.lang)
-
     row = locations_df[locations_df["Node_Id"] == dest_node]
     dest_name = str(row["Name"].values[0]) if not row.empty else dest_node
+
+    metas = [node_meta(n) for n in path]
+    edge_meters = [G[a][b]["weight"] for a, b in zip(path, path[1:])]
+    steps = build_steps(path, metas, req.lang, dest_name)
+    for m in metas:  # building names shown in the app ("Vous êtes ici : …")
+        m["building"] = building_name(m, req.lang)
 
     return {
         "destinationName": dest_name,
