@@ -22,7 +22,11 @@ that shrinks and follows you, switching building floors automatically.
 1. **Next / Back buttons** (reliable everywhere).
 2. **Step tracking (beta)** – phone accelerometer counts steps (needs HTTPS; iOS asks permission).
 3. **Demo** – simulated walk, for presentations.
-4. **Re-scan any QR** on the way → the app offers to continue the previous destination from there.
+4. **Je suis perdu / Je suis ici** – enter a nearby place (for example, in front of room B5) to continue the current route from that node.
+5. **Re-scan a QR code** on the way → the app offers to continue the previous destination from there. Generate codes for stairs as well as entrances with `--types entry_point,stairs`.
+6. **Outdoor GPS** – when an accurate GPS fix is more than 30 m from the route, the app automatically recalculates from the nearest outdoor node in `data/geo.json`.
+
+The navigation API accepts `destinationNode` for recalculations, so continuing an existing trip does not need to resolve the destination with the LLM again.
 
 ## Run locally (development)
 ```bash

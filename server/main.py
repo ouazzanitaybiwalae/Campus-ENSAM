@@ -1,7 +1,7 @@
 """
 Campus Navigator backend (FastAPI).
 
-- POST /api/navigate     : destination (free text) + start node -> route, per-node metadata, aligned steps
+- POST /api/navigate     : destination (free text or node ID) + start location -> route, metadata and steps
 - GET  /api/floorplan/x  : SVG file + viewBox for a map level (F0..F3)
 - GET  /api/health       : health check for the hosting platform
 - Serves the built React app (./dist) when it exists, so ONE public URL serves both
@@ -11,6 +11,7 @@ import os
 import re
 import json
 import difflib
+import math
 import unicodedata
 from pathlib import Path
 
@@ -27,6 +28,10 @@ load_dotenv(BASE_DIR / ".env")
 
 EXCEL_PATH = Path(os.getenv("EXCEL_PATH", BASE_DIR / "data" / "Book_4.xlsx"))
 DIST_DIR = BASE_DIR / "dist"
+
+GEO_PATH = Path(os.getenv("GEO_PATH", BASE_DIR / "data" / "geo.json"))
+GEO = json.loads(GEO_PATH.read_text(encoding="utf-8")) if GEO_PATH.exists() else {}
+
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
 app = FastAPI(title="Campus Navigator")
@@ -119,7 +124,32 @@ def node_meta(node_id: str) -> dict:
         "numFloors": fl["num_floors"] if fl else 1,
         "x": x,
         "y": y,
+        "lat": GEO[node_id][0] if node_id in GEO else None,
+        "lon": GEO[node_id][1] if node_id in GEO else None,
     }
+
+
+def nearest_outdoor_node(lat: float, lon: float):
+    """Return the closest graph node outdoors that has GPS coordinates."""
+    best_node = None
+    best_distance = float("inf")
+    meters_per_lon = 111320 * math.cos(math.radians(lat))
+    for node_id, coordinates in GEO.items():
+        if node_id not in G or node_id not in NODE or NODE[node_id]["floor_id"] != "OUTDOOR":
+            continue
+        if not isinstance(coordinates, (list, tuple)) or len(coordinates) < 2:
+            continue
+        node_lat, node_lon = coordinates[:2]
+        if not isinstance(node_lat, (int, float)) or not isinstance(node_lon, (int, float)):
+            continue
+        distance = math.hypot(
+            (lat - node_lat) * 110540,
+            (lon - node_lon) * meters_per_lon,
+        )
+        if distance < best_distance:
+            best_node = node_id
+            best_distance = distance
+    return best_node
 
 
 # Destination matching: LLM first, local fuzzy matching as fallback
@@ -255,9 +285,9 @@ def clean_step(s: str, lang: str) -> str:
     return re.sub(r"\bN\d+\b", "a nearby building" if lang == "en" else "un bâtiment voisin", str(s)).strip()
 
 
-def build_steps(path, metas, lang):
+def build_steps(path, metas, lang, use_llm=True):
     fb = fallback_steps(path, metas, lang)
-    if not groq_client:
+    if not groq_client or not use_llm:
         return fb
     language = "English" if lang == "en" else "French"
     raw = [
@@ -296,33 +326,59 @@ def build_steps(path, metas, lang):
 
 # API
 class NavigationRequest(BaseModel):
-    text: str
+    text: str = ""
     startNode: str
     lang: str = "fr"
+    startText: str | None = None
+    destinationNode: str | None = None
+    startLat: float | None = None
+    startLon: float | None = None
 
 
 @app.post("/api/navigate")
 def navigate(req: NavigationRequest):  # sync def -> runs in a worker thread (LLM calls block)
-    if req.startNode not in G or req.startNode not in NODE:
+    if req.startLat is not None or req.startLon is not None:
+        if req.startLat is None or req.startLon is None:
+            return {"error": "Point de départ invalide", "code": "bad_start"}
+        if (
+            not math.isfinite(req.startLat)
+            or not math.isfinite(req.startLon)
+            or not -90 <= req.startLat <= 90
+            or not -180 <= req.startLon <= 180
+        ):
+            return {"error": "Point de départ invalide", "code": "bad_start"}
+        start_node = nearest_outdoor_node(req.startLat, req.startLon)
+    elif req.startText is not None:
+        start_node = llm_match(req.startText)
+        if not start_node or start_node not in G or start_node not in NODE:
+            start_node = local_match(req.startText)
+    else:
+        start_node = req.startNode
+
+    if not start_node or start_node not in G or start_node not in NODE:
         return {"error": "Point de départ invalide", "code": "bad_start"}
 
-    dest_node = llm_match(req.text)
-    if not dest_node or dest_node not in G:
-        dest_node = local_match(req.text)
-    if not dest_node or dest_node not in G:
+    if req.destinationNode is not None:
+        dest_node = req.destinationNode
+    else:
+        dest_node = llm_match(req.text)
+        if not dest_node or dest_node not in G or dest_node not in NODE:
+            dest_node = local_match(req.text)
+    if not dest_node or dest_node not in G or dest_node not in NODE:
         return {"error": "Lieu non trouvé", "code": "not_found"}
 
-    if dest_node == req.startNode:
+    if dest_node == start_node:
         return {"error": "Vous y êtes déjà", "code": "already_there"}
 
     try:
-        path = nx.shortest_path(G, source=req.startNode, target=dest_node, weight="weight")
+        path = nx.shortest_path(G, source=start_node, target=dest_node, weight="weight")
     except nx.NetworkXNoPath:
         return {"error": "Aucun chemin trouvé", "code": "no_path"}
 
     metas = [node_meta(n) for n in path]
     edge_meters = [G[a][b]["weight"] for a, b in zip(path, path[1:])]
-    steps = build_steps(path, metas, req.lang)
+    edge_types = [G[a][b]["edge_type"] for a, b in zip(path, path[1:])]
+    steps = build_steps(path, metas, req.lang, use_llm=req.destinationNode is None)
 
     row = locations_df[locations_df["Node_Id"] == dest_node]
     dest_name = str(row["Name"].values[0]) if not row.empty else dest_node
@@ -333,6 +389,7 @@ def navigate(req: NavigationRequest):  # sync def -> runs in a worker thread (LL
         "path": path,
         "pathMeta": metas,
         "edgeMeters": edge_meters,  # Excel 'Weight', assumed to be metres
+        "edgeTypes": edge_types,
         "steps": steps,  # len(steps) == len(path)
     }
 
@@ -353,7 +410,7 @@ def get_floorplan(level: str):
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "llm": groq_client is not None, "nodes": G.number_of_nodes()}
+    return {"ok": True, "llm": groq_client is not None, "nodes": G.number_of_nodes(), "geo": len(GEO)}
 
 
 # Serve the built frontend

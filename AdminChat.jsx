@@ -36,6 +36,14 @@ const TRANSLATIONS = {
     stairsDown: (b, f) => `Descendez l'escalier de ${b} jusqu'à : ${f}`,
     motionDenied: "Capteurs de mouvement refusés. Utilisez le bouton « Suivant » pour avancer.",
     motionNone: "Aucun capteur de mouvement détecté sur cet appareil. Utilisez « Suivant » pour avancer.",
+    gpsDenied: "Position GPS indisponible. Autorisez la localisation ou utilisez « Suivant ».",
+    gpsLocating: 'Localisation GPS en cours…',
+    gpsWeak: (acc) => `Signal GPS faible (±${Math.round(acc)} m)`,
+    gpsOff: 'Vous semblez hors de l’itinéraire.',
+    gpsRerouting: 'Vous êtes hors itinéraire. Recalcul en cours…',
+    resync: 'Je suis perdu / Je suis ici',
+    resyncPlaceholder: 'ex. Je suis devant la salle B5',
+    resyncSubmit: 'Recalculer',
     resumeTitle: (d) => `Reprendre l'itinéraire vers « ${d} » depuis ce point ?`,
     resumeYes: 'Reprendre',
     resumeNo: 'Ignorer',
@@ -85,6 +93,14 @@ const TRANSLATIONS = {
     stairsDown: (b, f) => `Take the stairs in ${b} down to: ${f}`,
     motionDenied: 'Motion sensors were denied. Use the "Next" button to move forward.',
     motionNone: 'No motion sensor detected on this device. Use "Next" to move forward.',
+    gpsDenied: 'GPS location is unavailable. Allow location access or use "Next".',
+    gpsLocating: 'Locating you with GPS…',
+    gpsWeak: (acc) => `Weak GPS signal (±${Math.round(acc)} m)`,
+    gpsOff: 'You seem to be off the route.',
+    gpsRerouting: 'You are off route. Recalculating…',
+    resync: 'I am lost / I am here',
+    resyncPlaceholder: 'e.g. I am in front of room B5',
+    resyncSubmit: 'Recalculate',
     resumeTitle: (d) => `Continue the route to "${d}" from this point?`,
     resumeYes: 'Continue',
     resumeNo: 'Dismiss',
@@ -126,13 +142,13 @@ function clearLastRoute() {
 }
 
 // Returns { route } on success or { error: <code> } on failure.
-async function resolveRoute(text, startNode, lang) {
+async function resolveRoute(text, startNode, lang, routeOptions = {}) {
   if (!startNode) return { error: 'no_start' };
   try {
     const res = await fetch('/api/navigate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, startNode, lang }),
+      body: JSON.stringify({ text, startNode, lang, ...routeOptions }),
     });
     if (!res.ok) return { error: 'server' };
     const data = await res.json();
@@ -140,9 +156,11 @@ async function resolveRoute(text, startNode, lang) {
     return {
       route: {
         destination: data.destinationName || 'destination',
+        destinationNode: data.destinationNode,
         path: data.path,
         pathMeta: data.pathMeta,
         edgeMeters: data.edgeMeters,
+        edgeTypes: data.edgeTypes || [],
         steps: data.steps,
       },
     };
@@ -160,6 +178,7 @@ export default function AdminChat() {
   const [messages, setMessages] = useState([]);
   const [startNode, setStartNode] = useState(null);
   const positionRef = useRef(null); // where the user currently is (updates while they walk)
+  const lastGpsRerouteRef = useRef(null);
   const [resume, setResume] = useState(null);
 
   useEffect(() => {
@@ -180,25 +199,31 @@ export default function AdminChat() {
     if (scrollAnchorRef.current) scrollAnchorRef.current.scrollIntoView({ block: 'nearest' });
   }, [messages]);
 
-  async function sendMessage(overrideText) {
+  async function sendMessage(overrideText, routeOptions = {}) {
     const text = (overrideText ?? inputValue).trim();
-    if (!text) return;
+    if (!text && !routeOptions.destinationNode) return;
 
     const userMsg = { role: 'user', text, id: Date.now() };
     const pendingId = Date.now() + 1;
     const pendingMsg = { role: 'assistant', pending: true, id: pendingId };
 
-    setMessages((m) => [...m, userMsg, pendingMsg]);
-    setInputValue('');
+    setMessages((m) => [...m, ...(text ? [userMsg] : []), pendingMsg]);
+    if (text) setInputValue('');
     setResume(null);
 
     // start from where the user is NOW (not from the original QR code)
-    const from = positionRef.current || startNode;
-    const result = await resolveRoute(text, from, lang);
+    const from = routeOptions.startNode || positionRef.current || startNode;
+    const result = await resolveRoute(text, from, lang, routeOptions);
 
     if (result.route) {
       positionRef.current = result.route.path[0];
-      saveLastRoute({ text, destination: result.route.destination });
+      if (!routeOptions.destinationNode) lastGpsRerouteRef.current = null;
+      const previous = routeOptions.destinationNode ? loadLastRoute() : null;
+      saveLastRoute({
+        text: previous?.text || text,
+        destination: result.route.destination,
+        destinationNode: result.route.destinationNode,
+      });
     }
 
     setMessages((m) =>
@@ -214,6 +239,7 @@ export default function AdminChat() {
           : msg
       )
     );
+    return result;
   }
 
   function useSuggestion(s) {
@@ -247,7 +273,17 @@ export default function AdminChat() {
               <div style={{ background: '#FFF8E6', border: '1px solid #F2D9A0', borderRadius: 12, padding: '12px 14px', marginBottom: 14, maxWidth: 600, fontSize: 14 }}>
                 <div style={{ marginBottom: 10, fontWeight: 600 }}>{t.resumeTitle(resume.destination)}</div>
                 <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-                  <button onClick={() => sendMessage(resume.text)} style={{ background: 'oklch(0.5 0.15 258)', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontWeight: 600, cursor: 'pointer' }}>{t.resumeYes}</button>
+                  <button
+                    onClick={() =>
+                      sendMessage(
+                        resume.text,
+                        resume.destinationNode ? { destinationNode: resume.destinationNode } : {}
+                      )
+                    }
+                    style={{ background: 'oklch(0.5 0.15 258)', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    {t.resumeYes}
+                  </button>
                   <button onClick={() => { clearLastRoute(); setResume(null); }} style={{ background: '#fff', border: '1px solid #ddd', borderRadius: 8, padding: '8px 16px', fontWeight: 600, cursor: 'pointer' }}>{t.resumeNo}</button>
                 </div>
               </div>
@@ -307,6 +343,28 @@ export default function AdminChat() {
                             t={t}
                             onPositionChange={(node) => { positionRef.current = node; }}
                             onArrived={clearLastRoute}
+                            onResync={(locationText, destinationNode) =>
+                              sendMessage(locationText, { startText: locationText, destinationNode })
+                            }
+                            onReroute={({ lat, lon, destinationNode }) => {
+                              const previous = lastGpsRerouteRef.current;
+                              if (previous) {
+                                const distance = Math.hypot(
+                                  (lat - previous.lat) * 110540,
+                                  (lon - previous.lon) * 111320 * Math.cos((lat * Math.PI) / 180)
+                                );
+                                if (distance < 30) return;
+                              }
+                              lastGpsRerouteRef.current = { lat, lon };
+                              return sendMessage('', {
+                                startNode: positionRef.current || startNode,
+                                startLat: lat,
+                                startLon: lon,
+                                destinationNode,
+                              }).then((result) => {
+                                if (!result.route) lastGpsRerouteRef.current = null;
+                              });
+                            }}
                           />
                         )}
 

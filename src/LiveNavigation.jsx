@@ -11,6 +11,17 @@ import {
   createStepDetector,
 } from './navMath.js';
 
+import {
+  GPS_MAX_ACCURACY_M,
+  GPS_MAX_OFFROUTE_M,
+  hasGeo,
+  snapToRoute,
+  watchGps,
+  makeFakeGps,
+} from './gps.js';
+
+const FAKE_GPS = typeof location !== 'undefined' && new URLSearchParams(location.search).has('fakegps');
+
 const DEMO_SPEED_MPS = 5;
 const MIN_ZOOM = 0.8;
 const MAX_ZOOM = 8;
@@ -345,8 +356,8 @@ function LiveMap({ meta, target, t }) {
 /* Route card (instruction + map + controls)                           */
 /* ------------------------------------------------------------------ */
 
-export default function LiveRoute({ route, t, onPositionChange, onArrived }) {
-  const { path, pathMeta: meta, edgeMeters, steps, destination } = route;
+export default function LiveRoute({ route, t, onPositionChange, onArrived, onResync, onReroute }) {
+  const { path, pathMeta: meta, edgeMeters, edgeTypes = [], steps, destination, destinationNode } = route;
   const last = path.length - 1;
 
   const [pos, setPos] = useState({ index: 0, progress: 0 });
@@ -354,9 +365,28 @@ export default function LiveRoute({ route, t, onPositionChange, onArrived }) {
   const [demo, setDemo] = useState(false);
   const [motionMsg, setMotionMsg] = useState('');
   const [showAll, setShowAll] = useState(false);
+  const [gpsInfo, setGpsInfo] = useState(null);
+  const [showResync, setShowResync] = useState(false);
+  const [resyncText, setResyncText] = useState('');
+  const posRef = useRef(pos);
+  posRef.current = pos;
+  const onRerouteRef = useRef(onReroute);
+  onRerouteRef.current = onReroute;
+  const rerouteInProgressRef = useRef(false);
+  const lastRerouteAtRef = useRef(0);
 
   const arrived = pos.index >= last;
-  const advance = useCallback((m) => setPos((p) => advancePos(p, m, edgeMeters, last)), [edgeMeters, last]);
+  // GPS drives an edge only when auto mode is on and both outdoor endpoints have coordinates.
+  const gpsEdge =
+    auto &&
+    !arrived &&
+    edgeTypes[pos.index] === 'outdoor' &&
+    hasGeo(meta[pos.index]) &&
+    hasGeo(meta[pos.index + 1]);
+
+  const advance = useCallback((m) => {
+    setPos((p) => advancePos(p, m, edgeMeters, last, edgeTypes, performance.now()));
+  }, [edgeMeters, edgeTypes, last]);
 
   // preload the maps of every floor this route crosses
   useEffect(() => {
@@ -392,9 +422,59 @@ export default function LiveRoute({ route, t, onPositionChange, onArrived }) {
     return () => clearInterval(id);
   }, [demo, advance]);
 
+  // Outdoor progress follows GPS fixes snapped onto the planned route.
+  useEffect(() => {
+    if (!gpsEdge) {
+      setGpsInfo(null);
+      return;
+    }
+    setGpsInfo({ state: 'locating' });
+    const onFix = (g) => {
+      const acc = g.coords.accuracy;
+      if (acc > GPS_MAX_ACCURACY_M) return setGpsInfo({ state: 'weak', acc });
+      const prev = posRef.current;
+      const snap = snapToRoute({ lat: g.coords.latitude, lon: g.coords.longitude }, meta, edgeTypes, prev.index);
+      if (!snap || snap.d > GPS_MAX_OFFROUTE_M) {
+        if (rerouteInProgressRef.current) return;
+        setGpsInfo({ state: 'off', acc });
+        if (onRerouteRef.current && Date.now() - lastRerouteAtRef.current >= 20000) {
+          rerouteInProgressRef.current = true;
+          lastRerouteAtRef.current = Date.now();
+          setGpsInfo({ state: 'rerouting', acc });
+          Promise.resolve()
+            .then(() =>
+              onRerouteRef.current({
+                lat: g.coords.latitude,
+                lon: g.coords.longitude,
+                destinationNode,
+              })
+            )
+            .catch((error) => {
+              console.error('Error recalculating the GPS route:', error);
+              setGpsInfo({ state: 'off', acc });
+            })
+            .finally(() => {
+              rerouteInProgressRef.current = false;
+            });
+        }
+        return;
+      }
+      setGpsInfo({ state: 'ok', acc });
+      if (snap.index + snap.progress >= prev.index + prev.progress) {
+        setPos({ index: snap.index, progress: snap.progress });
+      }
+    };
+    const onError = () => {
+      setMotionMsg(t.gpsDenied || 'GPS unavailable. Use Next or enable location.');
+      setAuto(false);
+    };
+    const fake = FAKE_GPS ? makeFakeGps(meta, edgeTypes, posRef.current.index) : null;
+    return watchGps(onFix, onError, fake);
+  }, [gpsEdge]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // automatic mode: step counting with the phone's accelerometer
   useEffect(() => {
-    if (!auto) return;
+    if (!auto || gpsEdge) return;
     let gotEvent = false;
     const feed = createStepDetector(() => advance(STEP_LENGTH_M));
     const onMotion = (e) => {
@@ -414,7 +494,7 @@ export default function LiveRoute({ route, t, onPositionChange, onArrived }) {
       window.removeEventListener('devicemotion', onMotion);
       clearTimeout(timer);
     };
-  }, [auto, advance, t.motionNone]);
+  }, [auto, gpsEdge, advance, t.motionNone]);
 
   async function toggleAuto() {
     setMotionMsg('');
@@ -423,6 +503,9 @@ export default function LiveRoute({ route, t, onPositionChange, onArrived }) {
       if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
         const r = await DeviceMotionEvent.requestPermission(); // iOS: must come from a tap
         if (r !== 'granted') return setMotionMsg(t.motionDenied);
+      }
+      if (!FAKE_GPS) {
+        navigator.geolocation?.getCurrentPosition(() => {}, () => {}, { enableHighAccuracy: true, timeout: 8000 });
       }
       setDemo(false);
       setAuto(true);
@@ -465,6 +548,19 @@ export default function LiveRoute({ route, t, onPositionChange, onArrived }) {
         <div style={{ fontSize: 11.5, color: 'oklch(0.5 0.02 258)', marginTop: 4 }}>
           {arrived ? '' : `≈ ${remainingM} m ${t.remaining} · ${t.step} ${Math.min(pos.index + 1, last)}/${last}`}
         </div>
+        {gpsInfo && (
+          <div style={{ fontSize: 11.5, marginTop: 4, color: gpsInfo.state === 'ok' ? '#2e9e5b' : '#9A5A00' }}>
+            {'📍 '}
+            {gpsInfo.state === 'ok' && `GPS ±${Math.round(gpsInfo.acc)} m`}
+            {gpsInfo.state === 'locating' && (t.gpsLocating || 'Locating you…')}
+            {gpsInfo.state === 'rerouting' && t.gpsRerouting}
+            {gpsInfo.state === 'weak' &&
+              (typeof t.gpsWeak === 'function'
+                ? t.gpsWeak(gpsInfo.acc)
+                : t.gpsWeak || `Weak GPS signal (±${Math.round(gpsInfo.acc)} m)`)}
+            {gpsInfo.state === 'off' && (t.gpsOff || 'You seem off the route')}
+          </div>
+        )}
       </div>
 
       <LiveMap meta={meta} target={posToT(pos)} t={t} />
@@ -496,6 +592,35 @@ export default function LiveRoute({ route, t, onPositionChange, onArrived }) {
           {showAll ? t.hideSteps : t.allSteps}
         </button>
       </div>
+      <div style={{ ...styles.controls, marginTop: 6 }}>
+        <button style={styles.chip} onClick={() => setShowResync((visible) => !visible)}>
+          {t.resync}
+        </button>
+      </div>
+      {showResync && (
+        <form
+          style={{ ...styles.controls, marginTop: 6 }}
+          onSubmit={(event) => {
+            event.preventDefault();
+            const place = resyncText.trim();
+            if (!place) return;
+            onResync?.(place, destinationNode);
+            setResyncText('');
+            setShowResync(false);
+          }}
+        >
+          <input
+            value={resyncText}
+            onChange={(event) => setResyncText(event.target.value)}
+            placeholder={t.resyncPlaceholder}
+            aria-label={t.resyncPlaceholder}
+            style={styles.resyncInput}
+          />
+          <button type="submit" style={styles.primary} disabled={!resyncText.trim()}>
+            {t.resyncSubmit}
+          </button>
+        </form>
+      )}
       {motionMsg && <div style={styles.warn}>{motionMsg}</div>}
 
       {showAll && (
@@ -625,6 +750,14 @@ const styles = {
     fontWeight: 600,
     padding: '7px 12px',
     cursor: 'pointer',
+  },
+  resyncInput: {
+    flex: 2,
+    minWidth: 140,
+    border: '1px solid oklch(0.88 0.03 258)',
+    borderRadius: 10,
+    padding: '10px 12px',
+    fontSize: 13,
   },
   chipOn: { background: 'oklch(0.5 0.15 258)', color: '#fff', border: '1px solid oklch(0.5 0.15 258)' },
   warn: { marginTop: 8, fontSize: 12.5, color: '#9A5A00', background: '#FFF1DC', borderRadius: 8, padding: '6px 10px' },
