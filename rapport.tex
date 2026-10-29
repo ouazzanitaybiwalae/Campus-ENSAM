@@ -1,0 +1,2354 @@
+% =====================================================================
+%  Rapport de stage — Campus Navigator (ENSAM Rabat)
+%  Compilation : pdflatex rapport.tex (deux passes pour la table des matières)
+%  Les captures d'écran sont attendues dans le dossier images/ ;
+%  une image absente est remplacée par un cadre portant son nom.
+% =====================================================================
+\documentclass[12pt,a4paper]{report}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[french]{babel}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{array,booktabs,tabularx,longtable}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc}
+\usepackage{pgfgantt}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{chngcntr}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+
+\setlength{\parindent}{1.5em}
+\setlength{\parskip}{0.3em}
+\renewcommand{\baselinestretch}{1.15}
+
+% Numérotation des figures et tableaux par section (ex. Figure 1.7.1)
+\counterwithin{figure}{section}
+\counterwithin{table}{section}
+
+\titleformat{\chapter}[hang]{\Huge\bfseries}{\thechapter\hspace{0.8em}}{0pt}{\Huge\bfseries}
+\titlespacing*{\chapter}{0pt}{60pt}{40pt}
+
+\definecolor{codebg}{RGB}{246,248,250}
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single, rulecolor=\color{black!20},
+  breaklines=true, columns=fullflexible,
+  showstringspaces=false,
+  literate={é}{{\'e}}1 {è}{{\`e}}1 {à}{{\`a}}1 {ê}{{\^e}}1 {É}{{\'E}}1 {ô}{{\^o}}1 {ç}{{\c c}}1
+}
+
+% Image avec repli : si le fichier n'existe pas, un cadre indique le nom attendu
+\newcommand{\img}[2]{%
+  \IfFileExists{images/#2}%
+    {\includegraphics[width=#1]{images/#2}}%
+    {\fbox{\parbox[c][4cm][c]{0.9\linewidth}{\centering\small\ttfamily Image à insérer :\\ images/\detokenize{#2}}}}%
+}
+\emergencystretch=3em
+
+\begin{document}
+
+% =====================================================================
+% Page de garde
+% =====================================================================
+\begin{titlepage}
+  \centering
+  \IfFileExists{public/logo-ensam.jpg}{\includegraphics[width=0.45\linewidth]{public/logo-ensam.jpg}\par}{}
+  \vspace*{2cm}
+  {\Huge\bfseries Rapport de Stage\par}
+  \vspace{1.5cm}
+  {\large\bfseries Effectué au sein de :\par}
+  \vspace{0.2cm}
+  {\Large ENSAM de Rabat\par}
+  \vspace{2cm}
+  {\large\bfseries Effectué :\par}
+  {\large Du 8 Juillet 2026 au 30 Août 2026\par}
+  \vspace{2.5cm}
+  {\large\bfseries Réalisé par :\par}
+  \vspace{0.4cm}
+  {\large BAHLOULI Zaineb \hfill OUAZZANI TAYBI Walae\par}
+  \vspace{1.5cm}
+  {\large\bfseries Encadré par :\par}
+  \vspace{0.2cm}
+  {\large PR. Alami Kamouri Sophia\par}
+  \vfill
+  {\large Octobre 2026\par}
+\end{titlepage}
+
+\pagenumbering{Roman}
+
+% =====================================================================
+% Résumé
+% =====================================================================
+\section*{Résumé}
+\addcontentsline{toc}{chapter}{Résumé}
+
+Ce projet porte sur la conception et le développement de \emph{Campus Navigator}, un système
+de navigation intelligent destiné au campus de l'ENSAM Rabat. Il a pour objectif d'aider les
+étudiants, les enseignants et les visiteurs à trouver facilement leur chemin vers les différents
+lieux du campus (salles de cours, laboratoires, bureaux administratifs, amphithéâtres, salle
+d'étude\ldots) grâce à une interface conversationnelle bilingue (français et anglais).
+
+Le système repose sur une architecture client-serveur. Un backend FastAPI héberge le graphe du
+campus (modélisé à partir d'un classeur Excel), identifie la destination demandée à l'aide d'un
+modèle de langage interrogé via l'API Groq, complété par un mécanisme de recherche locale
+approximative lorsque le modèle n'est pas disponible, calcule le plus court chemin avec
+l'algorithme de Dijkstra (NetworkX) et génère une instruction de marche par point de passage.
+Un frontend React assure le guidage en temps réel : le trajet restant est tracé sur les plans SVG
+réels du campus, la carte change automatiquement d'étage et suit l'utilisateur, dont la position
+est estimée par le GPS du téléphone à l'extérieur et par un podomètre exploitant l'accéléromètre à
+l'intérieur. En cas d'écart au trajet, l'itinéraire est recalculé automatiquement. L'application
+est conteneurisée avec Docker et déployée sur une adresse HTTPS publique, accessible par simple
+scan d'un QR Code depuis n'importe quel réseau.
+
+\medskip
+\noindent\textbf{Mots-clés :} navigation intérieure, théorie des graphes, plus court chemin,
+traitement du langage naturel, géolocalisation, podométrie, expérience utilisateur.
+
+\clearpage
+% =====================================================================
+% Abstract
+% =====================================================================
+\section*{Abstract}
+\addcontentsline{toc}{chapter}{Abstract}
+
+This project focuses on the design and development of \emph{Campus Navigator}, an intelligent
+navigation system for the ENSAM Rabat campus. Its purpose is to help students, professors and
+visitors easily find their way to campus locations (classrooms, laboratories, administrative
+offices, lecture halls, study room\ldots) through a bilingual (French and English)
+conversational interface.
+
+The system follows a client-server architecture. A FastAPI backend hosts the campus graph
+(built from an Excel workbook), identifies the requested destination with a large language
+model served by the Groq API, backed by a local fuzzy-matching fallback when the model is
+unavailable, computes the shortest path with Dijkstra's algorithm (NetworkX) and generates one
+walking instruction per waypoint. A React frontend provides real-time guidance: the remaining
+route is drawn on the real SVG floor plans, the map switches floors automatically and follows
+the user, whose position is estimated with the phone's GPS outdoors and with an
+accelerometer-based step counter indoors. When the user leaves the route, it is recomputed
+automatically. The application is containerised with Docker and deployed on a public HTTPS
+address, reachable by scanning a QR code from any network.
+
+\medskip
+\noindent\textbf{Keywords:} indoor navigation, graph theory, shortest path, natural language
+processing, geolocation, pedestrian dead reckoning, user experience.
+
+% =====================================================================
+% Abréviations
+% =====================================================================
+\chapter*{Liste des abréviations}
+\addcontentsline{toc}{chapter}{Liste des abréviations}
+
+\begin{description}[leftmargin=1.5em, itemsep=0.25em]
+  \item[API] : \emph{Application Programming Interface}, interface de programmation applicative
+  \item[BLE] : \emph{Bluetooth Low Energy}, Bluetooth à basse consommation
+  \item[CORS] : \emph{Cross-Origin Resource Sharing}, partage de ressources entre origines
+  \item[DAX] : \emph{Data Analysis Expressions}
+  \item[ENSAM] : École Nationale Supérieure d'Arts et Métiers
+  \item[GNSS] : \emph{Global Navigation Satellite System}, système mondial de navigation par satellites
+  \item[GPS] : \emph{Global Positioning System}, système de positionnement global
+  \item[HTTP(S)] : \emph{HyperText Transfer Protocol (Secure)}
+  \item[IA] : Intelligence artificielle
+  \item[INDIA] : Ingénierie Numérique, Data Science et Intelligence Artificielle
+  \item[JSON] : \emph{JavaScript Object Notation}
+  \item[LLM] : \emph{Large Language Model}, grand modèle de langage
+  \item[PDR] : \emph{Pedestrian Dead Reckoning}, navigation pédestre à l'estime
+  \item[QR Code] : \emph{Quick Response Code}
+  \item[RDC] : Rez-de-chaussée
+  \item[REST] : \emph{Representational State Transfer}
+  \item[SIG] : Système d'information géographique
+  \item[SVG] : \emph{Scalable Vector Graphics}
+  \item[TALN] : Traitement automatique du langage naturel
+  \item[URL] : \emph{Uniform Resource Locator}
+  \item[UWB] : \emph{Ultra-Wideband}, ultra-large bande
+  \item[UX] : \emph{User Experience}, expérience utilisateur
+\end{description}
+
+\listoffigures
+\addcontentsline{toc}{chapter}{Table des figures}
+\listoftables
+\addcontentsline{toc}{chapter}{Liste des tableaux}
+\tableofcontents
+
+\clearpage
+\pagenumbering{arabic}
+
+% =====================================================================
+% Introduction générale
+% =====================================================================
+\chapter*{Introduction Générale}
+\addcontentsline{toc}{chapter}{Introduction Générale}
+
+Les campus universitaires modernes sont souvent constitués de plusieurs bâtiments, étages et
+espaces extérieurs dont l'agencement n'est pas toujours intuitif pour les nouveaux arrivants —
+étudiants en première année, enseignants vacataires ou visiteurs externes. À l'ENSAM Rabat, cette
+complexité se traduit concrètement par des salles réparties sur plusieurs bâtiments et niveaux,
+reliées par des couloirs, des escaliers et des allées extérieures dont la disposition n'est pas
+évidente au premier abord. Si les solutions de navigation extérieure (GPS, cartes routières) sont
+aujourd'hui matures, la navigation à l'intérieur des bâtiments reste un problème nettement moins
+bien résolu : le signal GPS y est peu fiable, et les plans papier affichés à l'entrée des bâtiments
+offrent une expérience statique, peu adaptée à la recherche précise d'un lieu.
+
+Comment permettre à un utilisateur de trouver rapidement et intuitivement le chemin vers
+n'importe quel lieu du campus sans dépendre d'une signalétique physique figée ni de compétences
+techniques particulières pour interroger le système ? La problématique se décompose en plusieurs
+sous-questions techniques : comment modéliser le campus (bâtiments, étages, couloirs, allées)
+sous une forme exploitable algorithmiquement ? Comment interpréter une requête formulée en
+langage courant (« Comment aller à la salle B7 ? ») pour en extraire la destination réelle, y
+compris lorsque le service d'IA est indisponible ? Comment calculer et représenter un itinéraire
+cohérent lorsqu'il traverse plusieurs bâtiments et plusieurs étages ? Comment suivre l'utilisateur
+pendant qu'il marche, sans infrastructure de localisation dédiée ? Et comment rendre le service
+accessible depuis n'importe quel smartphone, quel que soit le réseau utilisé ?
+
+Pour répondre à cette problématique, le projet a été mené selon une démarche progressive : une
+phase de modélisation du campus sous forme de graphe pondéré (nœuds et arêtes, rattachés à un
+étage et à un bâtiment) ; une phase de développement backend, exposant ce graphe via une API REST
+(FastAPI), intégrant un modèle de langage (Groq) pour l'extraction de la destination et la
+rédaction des instructions, et calculant le plus court chemin par l'algorithme de Dijkstra
+(NetworkX) ; une phase de développement frontend, avec une interface de chat en React affichant
+le trajet sur les plans réels de chaque étage ; une phase de calibration, de débogage et
+d'optimisation de l'expérience mobile ; et enfin une phase d'extension consacrée au guidage en
+temps réel (GPS à l'extérieur, podomètre à l'intérieur, recalcul automatique de l'itinéraire) et
+au déploiement public de l'application.
+
+Ce rapport s'articule en quatre chapitres. Le premier chapitre présente le cadre général du
+projet : le contexte académique, la problématique et la planification adoptée. Le deuxième
+chapitre dresse un état de l'art des technologies et outils mobilisés. Le troisième chapitre
+détaille la méthodologie suivie, depuis la mise en place de l'environnement de développement
+jusqu'à la conception de la base de données, du pipeline applicatif, du module de navigation en
+temps réel et du déploiement. Le quatrième chapitre présente les résultats obtenus ainsi que les
+principales difficultés rencontrées et les solutions apportées. Une conclusion générale dresse
+enfin le bilan du travail réalisé et propose des perspectives d'amélioration.
+
+% =====================================================================
+% Chapitre 1
+% =====================================================================
+\chapter{Cadre général du projet}
+
+\section{Introduction}
+
+Dans un établissement universitaire, l'orientation des étudiants, des enseignants, du personnel
+administratif et des visiteurs constitue un besoin important, particulièrement lorsque les
+bâtiments comportent plusieurs niveaux et un nombre important de salles, de bureaux, de
+laboratoires et de services. Pour une personne qui ne connaît pas suffisamment l'organisation
+spatiale de l'établissement, retrouver un emplacement précis peut nécessiter du temps et
+plusieurs demandes d'information.
+
+Cette difficulté est particulièrement présente dans le contexte de la navigation intérieure.
+Contrairement à la navigation en extérieur, où les systèmes de positionnement par satellite
+permettent généralement de déterminer la position d'un utilisateur, la navigation à l'intérieur
+des bâtiments nécessite de prendre en considération la structure des espaces, les couloirs, les
+différents niveaux ainsi que les connexions entre les zones accessibles.
+
+Dans ce contexte, le projet \textbf{Campus Navigator} a pour objectif de proposer une solution
+numérique destinée à faciliter l'orientation et la navigation au sein de l'\textbf{École
+Nationale Supérieure d'Arts et Métiers de Rabat (ENSAM de Rabat)}. La solution permet à
+l'utilisateur de rechercher une destination, d'obtenir un itinéraire depuis sa position de
+départ, de le visualiser directement sur le plan du campus et d'être guidé pas à pas pendant son
+déplacement.
+
+Le projet combine plusieurs domaines de l'ingénierie informatique, notamment le développement
+web, la modélisation des données, la théorie des graphes, la cartographie numérique, la
+géolocalisation et l'intelligence artificielle. L'objectif de ce premier chapitre est de
+présenter le cadre général dans lequel le projet a été réalisé, d'exposer la problématique ayant
+motivé son développement, de présenter les objectifs et le fonctionnement général de la
+solution, puis de décrire les différentes étapes de sa réalisation.
+
+\section{Présentation du cadre d'accueil}
+
+\subsection{Présentation de l'établissement}
+
+Le projet Campus Navigator a été réalisé au sein de l'\textbf{École Nationale Supérieure d'Arts
+et Métiers de Rabat (ENSAM de Rabat)}. L'établissement constitue un environnement universitaire
+regroupant différents espaces dédiés à l'enseignement, à la recherche, à l'administration et aux
+activités de la communauté universitaire.
+
+La diversité des espaces présents dans l'établissement implique une organisation spatiale
+composée de plusieurs bâtiments (bâtiment administratif, atelier, bâtiment de l'amphithéâtre,
+département électrique, amphithéâtres, salle d'étude, services\ldots), de salles, de bureaux,
+de laboratoires, de zones de circulation et d'allées extérieures. Cette organisation peut rendre
+les déplacements difficiles pour les personnes qui connaissent peu le campus.
+
+Dans ce contexte, la mise en place d'un système numérique permettant de rechercher un lieu et
+d'obtenir un itinéraire représente une approche permettant de faciliter l'accès à l'information
+spatiale. Campus Navigator s'inscrit ainsi dans une démarche visant à exploiter les technologies
+numériques pour améliorer l'orientation au sein de l'établissement.
+
+\subsection{Présentation de la filière}
+
+Le projet a été réalisé dans le cadre de la filière \textbf{INDIA — Ingénierie Numérique, Data
+Science et Intelligence Artificielle}.
+
+Cette formation s'inscrit dans le domaine des technologies numériques et met en œuvre différentes
+compétences liées au développement informatique, à l'exploitation des données, à l'intelligence
+artificielle et à la conception de solutions numériques.
+
+Le projet Campus Navigator constitue une application concrète de plusieurs de ces domaines. Sa
+réalisation nécessite notamment de manipuler des données structurées, de concevoir une
+architecture logicielle, de développer une interface web, de mettre en œuvre des algorithmes de
+recherche de chemins, d'exploiter les capteurs d'un smartphone et d'intégrer des techniques de
+traitement du langage naturel.
+
+\subsection{Cadre académique du projet}
+
+La réalisation de Campus Navigator s'inscrit dans le cadre du parcours d'ingénieur en
+\textbf{Ingénierie Numérique, Data Science et Intelligence Artificielle}. Elle représente une
+occasion de mettre en pratique les connaissances acquises au cours de la formation à travers un
+projet répondant à une problématique concrète.
+
+Le projet mobilise plusieurs compétences complémentaires. La gestion et la préparation des
+données sont nécessaires pour construire une représentation cohérente du campus. La théorie des
+graphes intervient dans la modélisation des connexions entre les emplacements et dans le calcul
+des itinéraires. Le développement web permet de construire l'interface et les services de la
+solution. Le traitement de signaux issus des capteurs (GPS, accéléromètre) permet de suivre
+l'utilisateur pendant son déplacement. Enfin, l'intelligence artificielle est exploitée afin de
+faciliter l'interprétation des requêtes formulées en langage naturel et la rédaction des
+instructions.
+
+Cette diversité technologique fait du projet un cas d'application transversal permettant de
+mettre en relation plusieurs domaines étudiés dans le cadre de la formation.
+
+\subsection{Encadrement du projet}
+
+Le projet a été réalisé sous l'encadrement de \textbf{Madame Alami Kamouri Sophia}.
+
+L'encadrement a permis d'assurer le suivi des différentes étapes du projet, depuis l'étude
+initiale des besoins et la préparation des données jusqu'au développement, aux tests et à la
+finalisation de la solution.
+
+Un rapport d'avancement a notamment été transmis à l'encadrante le \textbf{3 août}, permettant de
+présenter l'état d'avancement du développement et les premières fonctionnalités mises en place.
+
+\section{Contexte général du projet}
+
+\subsection{Contexte de la navigation au sein du campus}
+
+Dans un environnement universitaire, les utilisateurs sont régulièrement amenés à rechercher des
+emplacements spécifiques tels que des salles de cours, des laboratoires, des bureaux
+administratifs ou différents services. Cette recherche peut être relativement simple pour une
+personne connaissant bien l'établissement, mais elle devient plus complexe pour les nouveaux
+étudiants, les visiteurs ou toute personne qui ne maîtrise pas l'organisation spatiale du campus.
+
+La difficulté ne consiste pas uniquement à connaître l'emplacement d'une destination. Il est
+également nécessaire de déterminer le chemin permettant de l'atteindre depuis une position
+donnée, puis de le suivre sans se perdre. Ce chemin peut être composé de plusieurs segments et
+nécessiter le passage par différents couloirs, escaliers, bâtiments et allées extérieures.
+
+Afin de répondre à cette problématique, Campus Navigator repose sur une représentation numérique
+de l'environnement. Les différents emplacements sont modélisés sous forme de nœuds et leurs
+connexions sous forme d'arêtes pondérées par leur longueur. Cette représentation transforme
+l'environnement physique du campus en une structure exploitable par des algorithmes de recherche
+de chemins.
+
+Parallèlement à cette représentation logique, le projet utilise des plans numériques des
+bâtiments. Les plans SVG permettent de représenter visuellement les différents niveaux et de
+superposer le parcours calculé, ainsi que la position de l'utilisateur, sur la carte
+correspondante.
+
+\subsection{Difficultés rencontrées par les étudiants et visiteurs}
+
+La première difficulté concerne l'identification de la destination. Un utilisateur peut connaître
+le nom d'une salle ou d'un service sans connaître son identifiant interne, son niveau ou sa
+position exacte sur le plan ; il peut aussi le désigner par un nom d'usage ou avec une faute
+d'orthographe.
+
+La deuxième difficulté concerne la détermination de l'itinéraire. Plusieurs chemins peuvent
+permettre de rejoindre une destination, et l'utilisateur doit pouvoir identifier le plus court à
+partir de sa position de départ.
+
+La présence de plusieurs niveaux et de plusieurs bâtiments constitue également une contrainte
+importante. La navigation doit prendre en compte les escaliers, les entrées et les sorties afin
+de proposer un parcours cohérent.
+
+Enfin, l'information fournie doit être présentée de manière compréhensible et rester utile
+pendant la marche. Une liste de coordonnées ou une représentation technique du graphe ne
+constitue pas une information directement exploitable. Le système doit donc transformer le
+résultat du calcul en une représentation visuelle, en instructions de déplacement claires et en
+un suivi de la progression de l'utilisateur.
+
+\subsection{Besoin d'une solution numérique}
+
+Ces différentes difficultés mettent en évidence l'intérêt d'une solution numérique capable de
+centraliser les informations relatives aux lieux et de fournir automatiquement un itinéraire.
+
+Campus Navigator répond à ce besoin en proposant une interaction basée sur une requête formulée en
+langage naturel. L'utilisateur indique le lieu qu'il souhaite rejoindre, puis le système identifie
+la destination correspondante parmi les emplacements enregistrés.
+
+Une fois la destination identifiée, le système utilise le graphe du campus pour calculer un
+itinéraire depuis la position de départ. Le résultat est affiché sur le plan correspondant,
+accompagné d'instructions textuelles, puis mis à jour en continu au fur et à mesure que
+l'utilisateur avance.
+
+L'approche proposée réunit ainsi dans une même solution la recherche d'un emplacement, le calcul
+d'un itinéraire, sa représentation visuelle et le guidage pendant le déplacement.
+
+\section{Problématique}
+
+La problématique principale du projet peut être formulée de la manière suivante :
+
+\begin{quote}
+\textbf{Comment concevoir une solution numérique permettant à un utilisateur de localiser
+facilement un emplacement au sein d'un campus universitaire, d'obtenir un itinéraire clair à
+partir de sa position de départ et d'être guidé jusqu'à destination ?}
+\end{quote}
+
+Cette problématique comprend plusieurs aspects complémentaires.
+
+Tout d'abord, le système doit être capable d'interpréter la demande de l'utilisateur. Celui-ci
+peut exprimer sa destination sous une forme naturelle, sans connaître la structure interne des
+données. Le système doit donc établir une correspondance entre la demande formulée et
+l'emplacement correspondant dans la base de données, de manière robuste.
+
+Ensuite, l'environnement du campus doit être représenté sous une forme permettant le calcul
+automatique des déplacements. Les emplacements sont considérés comme des nœuds tandis que les
+connexions possibles entre ces emplacements sont représentées par des arêtes.
+
+À partir de cette représentation, le système doit déterminer un chemin entre le point de départ
+et la destination, puis l'associer aux plans correspondants afin d'en fournir une représentation
+visuelle.
+
+Le système doit également estimer la position de l'utilisateur pendant son déplacement, sans
+infrastructure de localisation dédiée, et réagir lorsqu'il s'écarte du trajet.
+
+Enfin, l'ensemble du processus doit être présenté à travers une interface simple et intuitive,
+accessible depuis un smartphone quel que soit le réseau utilisé.
+
+La problématique du projet se situe ainsi à l'intersection de la \textbf{modélisation spatiale},
+de la \textbf{théorie des graphes}, du \textbf{développement web}, de la
+\textbf{géolocalisation} et du \textbf{traitement automatique du langage}.
+
+\section{Objectifs du projet}
+
+\subsection{Objectif général}
+
+L'objectif général de \textbf{Campus Navigator} est de développer une solution numérique
+permettant d'assister les utilisateurs dans leurs déplacements au sein de l'ENSAM de Rabat, en
+leur permettant de rechercher un emplacement, d'obtenir un itinéraire adapté et d'être guidés en
+temps réel jusqu'à destination.
+
+La solution cherche notamment à simplifier l'interaction avec le système en permettant à
+l'utilisateur de formuler sa demande en langage naturel, puis en transformant cette demande en
+une destination exploitable par le moteur de navigation.
+
+\subsection{Objectifs spécifiques}
+
+Pour atteindre cet objectif général, plusieurs objectifs spécifiques ont été définis.
+
+Le premier objectif consiste à \textbf{recenser et structurer les points d'intérêt du campus}.
+Au cours du projet, \textbf{68 points d'intérêt} ont été recensés (34 salles de cours,
+17 laboratoires, 6 sanitaires, 4 services, 2 bureaux, 2 salles de prière, 2 espaces d'étude et
+1 espace événementiel).
+
+Le deuxième objectif consiste à \textbf{préparer et nettoyer les données} nécessaires à la
+représentation de l'environnement, organisées autour des niveaux, des emplacements, des nœuds,
+des connexions et des types de nœuds.
+
+Le troisième objectif est de \textbf{modéliser l'environnement sous forme d'un graphe pondéré}
+afin de permettre le calcul automatique des itinéraires.
+
+Le quatrième objectif consiste à \textbf{développer une API backend} traitant les demandes de
+navigation et communiquant avec l'interface utilisateur.
+
+Le cinquième objectif est de \textbf{développer une interface web interactive} permettant de
+rechercher une destination, de visualiser le plan et de consulter les indications de
+déplacement.
+
+Le sixième objectif consiste à \textbf{intégrer les plans réels du campus} et à assurer leur
+calibration afin que le parcours calculé soit correctement positionné sur la représentation
+graphique.
+
+Le septième objectif consiste à \textbf{guider l'utilisateur en temps réel}, en estimant sa
+position (GPS à l'extérieur, podomètre à l'intérieur) et en recalculant l'itinéraire lorsqu'il
+s'en écarte.
+
+Enfin, le projet vise à \textbf{rendre la solution accessible et agréable à utiliser} : support
+bilingue, adaptation aux appareils mobiles, utilisation du langage naturel et
+\textbf{déploiement sur une adresse publique sécurisée (HTTPS)}.
+
+\section{Présentation de la solution proposée}
+
+\subsection{Principe général de Campus Navigator}
+
+Campus Navigator est une solution de navigation conçue pour faciliter la recherche
+d'emplacements au sein de l'ENSAM de Rabat.
+
+L'utilisateur scanne un QR Code affiché sur l'un des écrans du campus, ce qui lui fournit son
+point de départ, puis indique dans une interface de chat la destination qu'il souhaite
+rejoindre. La requête est transmise au serveur afin d'identifier l'emplacement correspondant dans
+les données du campus.
+
+Une fois la destination déterminée, le système recherche le plus court chemin entre le point de
+départ et la destination dans le graphe du campus, puis rédige une instruction de marche pour
+chaque point de passage. Le parcours est ensuite affiché sur le plan du niveau concerné ; la
+carte suit l'utilisateur, efface progressivement la portion déjà parcourue et change
+automatiquement de plan lorsque le trajet passe à un autre étage.
+
+Le fonctionnement général peut donc être représenté par la chaîne suivante :
+
+\begin{center}
+\textbf{Scan du QR Code $\rightarrow$ Requête utilisateur $\rightarrow$ Identification de la
+destination $\rightarrow$ Calcul de l'itinéraire $\rightarrow$ Génération des instructions
+$\rightarrow$ Guidage en temps réel sur le plan}
+\end{center}
+
+\subsection{Architecture fonctionnelle}
+
+La solution développée repose sur plusieurs composants complémentaires.
+
+Les \textbf{données du campus} constituent la première composante. Elles regroupent les
+informations relatives aux niveaux, aux emplacements, aux nœuds, aux connexions et aux types de
+nœuds (classeur Excel), complétées par les coordonnées GPS des nœuds extérieurs (fichier JSON).
+
+Le \textbf{backend FastAPI} constitue la deuxième composante. Il fournit l'endpoint
+\texttt{/api/navigate} destiné au traitement des demandes de navigation, l'endpoint
+\texttt{/api/floorplan} qui renvoie le plan d'un niveau, l'endpoint \texttt{/api/geo} qui
+renvoie le réseau extérieur géolocalisé, et l'endpoint \texttt{/api/health} utilisé par la
+plateforme d'hébergement. En production, il sert également l'application web compilée.
+
+La troisième composante correspond au \textbf{graphe de navigation}, construit avec NetworkX, qui
+représente les relations entre les points du campus et permet de calculer les plus courts
+chemins.
+
+La quatrième composante est constituée des \textbf{plans SVG}, qui fournissent une
+représentation graphique des espaces et sur lesquels sont tracés le trajet et la position de
+l'utilisateur.
+
+Le \textbf{frontend React} fournit l'interface avec laquelle l'utilisateur interagit : une
+interface de type chat permet de formuler les demandes, et un module de navigation en temps réel
+affiche l'itinéraire et suit l'utilisateur à l'aide des capteurs du téléphone.
+
+Une composante basée sur un \textbf{modèle de langage via Groq} est utilisée pour interpréter
+les requêtes et rédiger les instructions de déplacement. Elle est doublée de mécanismes de repli
+locaux, de sorte que l'application reste fonctionnelle sans elle.
+
+\subsection{Utilisateurs concernés}
+
+Campus Navigator est principalement destiné aux personnes amenées à se déplacer au sein de
+l'établissement.
+
+Les \textbf{étudiants} constituent une catégorie importante d'utilisateurs, notamment lorsqu'ils
+doivent rejoindre une salle, un laboratoire ou un service qu'ils connaissent peu.
+
+La solution peut également être utilisée par les \textbf{enseignants et le personnel
+administratif}, notamment pour rechercher des espaces qu'ils fréquentent occasionnellement.
+
+Les \textbf{visiteurs} peuvent également en bénéficier lors d'événements ou de rencontres
+organisés au sein de l'établissement.
+
+Enfin, la solution peut constituer un outil exploitable par l'\textbf{administration} pour
+centraliser et gérer les informations relatives aux lieux du campus.
+
+\subsection{Valeur apportée par la solution}
+
+L'intérêt principal de Campus Navigator réside dans la combinaison de plusieurs fonctionnalités
+au sein d'une même application.
+
+La solution ne se limite pas à fournir une représentation statique du campus : elle calcule
+automatiquement un parcours à partir d'une position de départ, puis accompagne l'utilisateur
+pendant sa marche.
+
+L'utilisation d'une interface conversationnelle rend la recherche plus naturelle : l'utilisateur
+exprime sa demande sans connaître les identifiants techniques utilisés par le système.
+
+La représentation du trajet sur les plans SVG, combinée au suivi de la position, apporte une
+dimension visuelle importante et facilite la compréhension du parcours.
+
+Enfin, aucune installation n'est requise : l'application s'ouvre dans le navigateur du téléphone
+par simple scan d'un QR Code, et ne nécessite aucune infrastructure de localisation (balises,
+bornes) sur le campus.
+
+\section{Planification du projet}
+
+\subsection{Méthodologie de réalisation}
+
+La réalisation du projet Campus Navigator s'est déroulée du \textbf{8 juillet au 30 août} selon
+une démarche progressive, puis a été prolongée fin octobre par une phase d'extension. Le travail
+a été organisé en plusieurs phases allant de l'étude des besoins au déploiement de la solution.
+
+La première phase a été consacrée à l'étude des besoins et à la collecte des données. Cette étape
+a permis d'identifier les utilisateurs cibles, de recenser les points d'intérêt du campus et de
+préparer les données nécessaires à la navigation. Au total, \textbf{68 points d'intérêt} ont été
+recensés. La base de données Excel a ensuite été construite et nettoyée autour de plusieurs
+ensembles d'informations : niveaux, emplacements, nœuds, arêtes et types de nœuds. Un contrôle de
+la qualité des données a également été réalisé à l'aide de Power BI.
+
+La deuxième phase, réalisée du \textbf{21 au 27 juillet}, a porté sur la modélisation du graphe de
+navigation avec NetworkX. Le graphe comporte aujourd'hui \textbf{145 nœuds} et \textbf{174
+arêtes} saisies (172 connexions distinctes une fois les doublons fusionnés). Une analyse de sa
+structure a permis d'identifier les nœuds isolés et de procéder aux corrections nécessaires afin
+d'améliorer la cohérence du réseau.
+
+La troisième phase, du \textbf{28 juillet au 3 août}, a été consacrée au développement de
+l'application. Le backend a été développé avec FastAPI et l'endpoint \texttt{/api/navigate} a
+été mis en place. En parallèle, une interface de chat a été développée avec React, et les QR Codes
+des écrans du campus ont été générés. Une première intégration d'un modèle de langage, via l'API
+Gemini, a permis d'exploiter le langage naturel ; c'est cette version qui figure dans le rapport
+d'avancement. Les limites de quota de cette API ayant rendu son usage impossible, l'application a
+ensuite été migrée vers l'API Groq (voir section~\ref{sec:llm}). Un rapport d'avancement a été
+envoyé à l'encadrante le \textbf{3 août}.
+
+La quatrième phase, du \textbf{4 au 10 août}, a porté sur la cartographie et la calibration. Les
+cartes simplifiées utilisées initialement ont été remplacées par les plans SVG réels. Un travail
+d'alignement précis des coordonnées a été effectué afin de garantir la correspondance entre le
+graphe et la représentation visuelle du campus. Plusieurs problèmes d'affichage ont également été
+corrigés, notamment l'absence de visibilité du tracé et la présence de doublons dans les onglets
+associés aux étages.
+
+La cinquième phase, du \textbf{11 au 17 août}, a été consacrée à l'amélioration de l'expérience
+utilisateur : navigation tactile (déplacement du plan, zoom par pincement), meilleure visibilité
+du tracé et ajout de marqueurs pour la position et la destination.
+
+La sixième phase, du \textbf{18 au 24 août}, a regroupé le support bilingue (\textbf{français et
+anglais}), les tests et la finalisation de l'application. Des tests utilisateurs ont permis
+d'identifier les derniers problèmes fonctionnels et ergonomiques, corrigés avant la mise en
+service de la solution en réseau local.
+
+La période du \textbf{25 au 30 août} a été consacrée à la rédaction d'une première version du
+rapport et à la préparation de la présentation.
+
+Enfin, une phase d'extension, réalisée \textbf{fin octobre 2026}, a porté sur le guidage en temps
+réel et la mise en ligne : refonte de l'interface pour mobile, suivi de la position par
+accéléromètre puis par GPS sur les trajets extérieurs, recalcul automatique de l'itinéraire,
+amélioration de la rédaction des instructions, et déploiement de l'application sur une adresse
+HTTPS publique avec régénération des QR Codes.
+
+\subsection{Synthèse des étapes réalisées}
+
+Le déroulement du projet peut être résumé dans le tableau suivant :
+
+\begin{table}[h]
+\centering
+\caption{Synthèse des étapes réalisées}
+\label{tab:etapes}
+\small
+\begin{tabularx}{\linewidth}{@{}p{2.6cm}p{3.2cm}X@{}}
+\toprule
+\textbf{Période} & \textbf{Phase} & \textbf{Principales réalisations}\\
+\midrule
+8 -- 20 juillet & Étude des besoins et collecte & 68 points d'intérêt, préparation et nettoyage des données, contrôle Power BI\\
+21 -- 27 juillet & Modélisation du graphe & 145 nœuds, 174 arêtes, correction des nœuds isolés\\
+28 juillet -- 3 août & Développement & FastAPI, API de navigation, React, QR Codes, première intégration LLM\\
+4 -- 10 août & Cartographie et calibration & Plans SVG réels, alignement des coordonnées, corrections d'affichage\\
+11 -- 17 août & Amélioration UX & Support tactile, pan/zoom, visibilité du trajet, marqueurs\\
+18 -- 24 août & Bilinguisme, tests et finalisation & Français et anglais, tests utilisateurs, corrections\\
+25 -- 30 août & Documentation & Première rédaction du rapport\\
+Fin octobre & Navigation temps réel et déploiement & GPS extérieur, podomètre, recalcul d'itinéraire, Docker, hébergement HTTPS, nouveaux QR Codes\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Diagramme de Gantt}
+
+Afin de représenter visuellement la répartition temporelle des activités, un diagramme de Gantt
+a été élaboré pour la période de stage (Figure~\ref{fig:gantt}). La phase d'extension de fin
+octobre, réalisée après la période de stage, n'y figure pas.
+
+\begin{figure}[h]
+\centering
+\resizebox{\linewidth}{!}{%
+\begin{ganttchart}[
+    time slot format=isodate,
+    x unit=0.28cm, y unit chart=0.7cm,
+    hgrid, vgrid={*6{draw=none},dotted},
+    title height=1,
+    bar/.append style={fill=blue!60!black},
+    bar height=0.5,
+    milestone/.append style={fill=black},
+    bar label font=\small, milestone label font=\small\itshape,
+  ]{2026-07-08}{2026-08-30}
+  \gantttitle{Juillet 2026}{24} \gantttitle{Août 2026}{30} \\
+  \ganttbar{Étude des besoins \& collecte}{2026-07-08}{2026-07-20} \\
+  \ganttbar{Modélisation du graphe}{2026-07-21}{2026-07-27} \\
+  \ganttbar[bar/.append style={fill=orange!85!black}]{Développement}{2026-07-28}{2026-08-03} \\
+  \ganttmilestone{Rapport d'avancement}{2026-08-03} \\
+  \ganttbar[bar/.append style={fill=orange!85!black}]{Cartographie \& calibration}{2026-08-04}{2026-08-10} \\
+  \ganttbar[bar/.append style={fill=orange!85!black}]{Amélioration UX}{2026-08-11}{2026-08-17} \\
+  \ganttbar[bar/.append style={fill=orange!85!black}]{Bilinguisme, tests \& finalisation}{2026-08-18}{2026-08-24} \\
+  \ganttmilestone{Mise en service locale}{2026-08-24} \\
+  \ganttbar[bar/.append style={fill=black!80}]{Rédaction du rapport}{2026-08-25}{2026-08-30}
+\end{ganttchart}}
+\caption{Diagramme de Gantt du projet Campus Navigator}
+\label{fig:gantt}
+\end{figure}
+
+Le diagramme permet de visualiser l'enchaînement des phases et leur répartition sur la période du
+8 juillet au 30 août. Cette organisation progressive a permis de faire évoluer le projet depuis la
+préparation des données et la modélisation du campus jusqu'à l'intégration des composantes, aux
+tests et à la finalisation de la solution.
+
+\section{Conclusion}
+
+Ce chapitre a permis de présenter le cadre général du projet \textbf{Campus Navigator}, réalisé
+au sein de l'\textbf{ENSAM de Rabat} dans le cadre de la filière \textbf{INDIA — Ingénierie
+Numérique, Data Science et Intelligence Artificielle}, sous l'encadrement de \textbf{Madame
+Alami Kamouri Sophia}.
+
+L'étude du contexte a mis en évidence la difficulté que peut représenter la recherche d'un
+emplacement au sein d'un campus comportant plusieurs bâtiments et niveaux, en particulier pour
+les utilisateurs qui ne connaissent pas l'organisation spatiale de l'établissement.
+
+Pour répondre à cette problématique, Campus Navigator combine une représentation structurée des
+données du campus, une modélisation sous forme de graphe, un calcul d'itinéraires, des plans SVG,
+une interface web interactive et un guidage en temps réel exploitant les capteurs du téléphone.
+L'intégration d'un modèle de langage facilite l'interaction à travers des requêtes en langage
+naturel.
+
+Le projet a été réalisé progressivement entre le \textbf{8 juillet et le 30 août}, puis étendu
+fin octobre, en passant par l'étude des besoins, la préparation des données, la modélisation du
+graphe, le développement, la calibration des plans, l'amélioration de l'expérience utilisateur,
+le support bilingue, les tests, le guidage en temps réel et le déploiement.
+
+Le chapitre suivant est consacré à l'\textbf{état de l'art}. Il étudie les principales approches,
+technologies et méthodes utilisées dans le domaine de la navigation intérieure et situe les choix
+technologiques effectués dans le cadre de Campus Navigator.
+
+% =====================================================================
+% Chapitre 2
+% =====================================================================
+\chapter{État de l'art}
+
+\section{Introduction}
+
+Le développement d'une solution de navigation destinée à un environnement universitaire nécessite
+la prise en compte de plusieurs domaines technologiques complémentaires. Contrairement à la
+navigation extérieure, qui repose largement sur des systèmes de positionnement satellitaire et
+sur des cartographies standardisées, la navigation intérieure doit s'adapter à des espaces
+complexes, composés de plusieurs bâtiments, niveaux, couloirs, salles, escaliers et points
+d'accès. Dans ce contexte, la représentation de l'environnement, la détermination de la position
+de l'utilisateur et le calcul d'un itinéraire adapté constituent des problématiques essentielles.
+
+Les technologies de localisation telles que le Wi-Fi, le Bluetooth Low Energy, l'Ultra-Wideband,
+les capteurs inertiels des smartphones ou encore les QR Codes peuvent être utilisées pour
+déterminer ou faciliter la détermination de la position d'un utilisateur. Parallèlement, les
+techniques de cartographie numérique permettent de représenter les espaces intérieurs, tandis que
+les algorithmes issus de la théorie des graphes permettent de calculer des itinéraires.
+
+Plus récemment, l'intelligence artificielle et les modèles de langage ont ouvert de nouvelles
+possibilités pour améliorer l'interaction entre l'utilisateur et les systèmes de navigation. Au
+lieu de rechercher manuellement une destination dans une liste, l'utilisateur peut formuler sa
+demande en langage naturel ; le système doit alors interpréter cette requête, identifier la
+destination et produire un itinéraire compréhensible.
+
+Dans ce chapitre, l'état de l'art est présenté à travers les principales technologies et méthodes
+susceptibles d'être utilisées dans une solution de navigation intérieure : caractéristiques de la
+navigation indoor, technologies de localisation, représentation cartographique, calcul
+d'itinéraires, intelligence artificielle et langage naturel, technologies de développement et de
+déploiement web, et stockage des données. Une comparaison des approches existantes permet enfin
+de positionner Campus Navigator.
+
+\section{Navigation intérieure}
+
+\subsection{Définition de la navigation intérieure}
+
+La navigation intérieure, ou \emph{indoor navigation}, désigne l'ensemble des techniques
+permettant à un utilisateur de se déplacer efficacement à l'intérieur d'un bâtiment ou d'un
+complexe de bâtiments. Elle comprend généralement trois fonctions complémentaires : la
+localisation de l'utilisateur, la détermination de la destination et le calcul d'un itinéraire
+entre la position de départ et cette destination ; une quatrième fonction, le suivi pendant le
+déplacement, permet de passer d'un simple calcul d'itinéraire à un véritable guidage.
+
+Dans un environnement universitaire, la navigation intérieure peut concerner des salles de cours,
+des laboratoires, des bureaux administratifs, des amphithéâtres, des bibliothèques ou des espaces
+communs. La diversité de ces espaces rend la recherche d'un emplacement plus complexe,
+particulièrement pour les nouveaux étudiants ou les visiteurs.
+
+La navigation intérieure ne se limite donc pas à afficher une carte. Une solution complète doit
+représenter la structure du bâtiment, identifier les lieux accessibles et déterminer un chemin
+cohérent entre deux points.
+
+\subsection{Particularités et contraintes}
+
+La principale difficulté de la navigation intérieure réside dans l'absence d'une référence de
+positionnement universelle comparable au GPS utilisé en extérieur. Les signaux satellitaires sont
+fortement atténués ou indisponibles à l'intérieur des bâtiments. Il devient alors nécessaire
+d'utiliser d'autres technologies ou mécanismes pour déterminer la position de l'utilisateur.
+
+La structure physique des bâtiments constitue également une contrainte importante. Un bâtiment
+peut comporter plusieurs étages reliés par des escaliers, des ascenseurs ou des passages
+spécifiques. Le système doit tenir compte de la connectivité entre les niveaux et éviter de
+proposer des chemins qui traversent des murs ou des zones non accessibles.
+
+Enfin, l'information fournie doit être compréhensible. Une représentation graphique précise ne
+suffit pas toujours à garantir une bonne expérience de navigation ; les indications doivent
+également être présentées clairement, ce qui explique l'intérêt croissant des interfaces
+interactives et du langage naturel.
+
+\section{Technologies de localisation intérieure}
+
+La localisation constitue l'un des composants fondamentaux d'un système de navigation. Elle
+permet de déterminer le point à partir duquel l'itinéraire doit être calculé, puis de suivre
+l'utilisateur. Plusieurs technologies peuvent être utilisées, chacune présentant un compromis
+différent entre précision, coût, infrastructure et facilité de déploiement.
+
+\subsection{GPS et GNSS}
+
+Le GPS, intégré plus largement dans la famille des systèmes GNSS, constitue une technologie de
+référence pour la localisation extérieure. Il permet d'estimer la position d'un appareil à partir
+des signaux provenant de satellites. Dans un navigateur web, il est accessible via l'API de
+géolocalisation (\texttt{navigator.geolocation}), qui fournit la latitude, la longitude et une
+estimation de la précision ; cette API n'est disponible que sur des pages servies en HTTPS.
+
+Son utilisation à l'intérieur des bâtiments est limitée par l'atténuation des signaux : il ne
+permet généralement pas de déterminer la salle ou le couloir dans lequel se trouve l'utilisateur.
+
+Le GPS reste néanmoins pertinent sur les parties extérieures d'un campus (allées, cours, accès
+entre bâtiments), où une précision de quelques mètres suffit à suivre l'utilisateur. C'est
+l'usage qui en est fait dans Campus Navigator.
+
+\subsection{Wi-Fi}
+
+Les réseaux Wi-Fi déjà présents dans de nombreux bâtiments peuvent être exploités pour la
+localisation intérieure. La position peut être estimée à partir de la puissance des signaux reçus
+ou grâce à une phase de calibration appelée \emph{fingerprinting}.
+
+L'un des principaux avantages du Wi-Fi réside dans la réutilisation d'une infrastructure
+existante. Cependant, la précision dépend fortement de l'environnement et de la disposition des
+points d'accès, et les modifications de l'infrastructure peuvent nécessiter une nouvelle
+calibration. En outre, les navigateurs web n'exposent pas la puissance des signaux Wi-Fi, ce qui
+réserve cette approche aux applications natives.
+
+\subsection{Bluetooth Low Energy}
+
+Le Bluetooth Low Energy, notamment à travers les balises (\emph{beacons}), constitue une autre
+approche couramment étudiée. Des balises fixes peuvent être installées dans différentes zones du
+bâtiment et leur signal détecté par le smartphone de l'utilisateur.
+
+Cette technologie présente l'avantage d'une consommation énergétique faible et d'une
+infrastructure pouvant être déployée progressivement. Toutefois, la précision dépend de la
+configuration des balises et des conditions physiques de l'environnement, et l'installation
+représente un coût matériel.
+
+\subsection{Ultra-Wideband}
+
+L'Ultra-Wideband (UWB) utilise des signaux radio permettant d'obtenir des mesures de distance
+très précises. Cette technologie est intéressante lorsque la précision de localisation constitue
+une exigence importante.
+
+Son principal obstacle dans le cadre d'un projet universitaire réside dans les besoins matériels :
+son déploiement nécessite des équipements compatibles et une infrastructure adaptée.
+
+\subsection{Capteurs inertiels et podométrie}
+
+Les smartphones intègrent des capteurs inertiels (accéléromètre, gyroscope, magnétomètre),
+accessibles depuis le navigateur via l'événement \texttt{devicemotion}. La navigation à l'estime
+pédestre (\emph{Pedestrian Dead Reckoning}, PDR) exploite ces capteurs pour détecter les pas de
+l'utilisateur et estimer la distance parcourue, sans aucune infrastructure.
+
+Cette approche présente l'avantage d'être disponible sur pratiquement tous les téléphones. Sa
+limite principale est la dérive : l'erreur s'accumule avec la distance (longueur de pas variable,
+pas manqués ou détectés à tort). Elle est donc particulièrement adaptée lorsqu'elle est combinée à
+une contrainte forte, comme le fait de savoir que l'utilisateur suit un itinéraire connu, et à des
+points de recalage (GPS, QR Codes). Sur iOS, l'accès à ces capteurs doit être autorisé
+explicitement par l'utilisateur, à la suite d'une interaction (un appui).
+
+\subsection{QR Codes et localisation assistée}
+
+Les QR Codes constituent une approche différente. Plutôt que d'estimer automatiquement la position
+de l'utilisateur, le système lui demande de scanner un code placé à un emplacement connu. Le scan
+associe alors l'utilisateur à un nœud déterminé de la carte.
+
+Cette méthode est particulièrement intéressante pour un prototype : elle est peu coûteuse, facile
+à déployer et fournit une position initiale exacte. En revanche, elle nécessite une action de
+l'utilisateur et ne fournit pas, à elle seule, un suivi continu ; elle peut cependant servir de
+point de recalage si des codes sont placés le long des trajets (par exemple aux escaliers).
+
+Un QR Code est un code-barres bidimensionnel normalisé (ISO/IEC 18004), capable d'encoder une
+chaîne de caractères telle qu'une URL. Dans Campus Navigator, chaque code encode l'adresse
+publique de l'application paramétrée avec l'identifiant du nœud de départ
+(\texttt{https://<adresse>/?start=N114}) ; sa génération est automatisée par un script Python
+(bibliothèque \texttt{qrcode}).
+
+\subsection{Comparaison des technologies de localisation}
+
+Le choix d'une technologie dépend du niveau de précision recherché, de l'infrastructure disponible
+et du contexte d'utilisation.
+
+\begin{table}[h]
+\centering
+\caption{Comparaison synthétique des technologies de localisation intérieure}
+\label{tab:loc}
+\small
+\begin{tabularx}{\linewidth}{@{}lXX@{}}
+\toprule
+\textbf{Technologie} & \textbf{Principal intérêt} & \textbf{Principale limite}\\
+\midrule
+\textbf{GPS/GNSS} & Disponible sur tout smartphone, efficace en extérieur & Faible efficacité à l'intérieur\\
+\textbf{Wi-Fi} & Utilise une infrastructure existante & Précision variable, inaccessible depuis un navigateur\\
+\textbf{BLE} & Faible consommation et déploiement flexible & Installation de balises nécessaire\\
+\textbf{UWB} & Localisation très précise & Coût et matériel spécialisé\\
+\textbf{Capteurs inertiels (PDR)} & Aucune infrastructure, disponible partout & Dérive avec la distance\\
+\textbf{QR Code} & Simple, peu coûteux, position exacte & Nécessite une action de l'utilisateur\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Dans le contexte de Campus Navigator, une approche hybride a été retenue : le QR Code fournit une
+position de départ exacte, le GPS suit l'utilisateur sur les tronçons extérieurs, et la podométrie
+prend le relais à l'intérieur, la progression étant contrainte à l'itinéraire calculé. Cette
+combinaison ne nécessite aucune infrastructure supplémentaire sur le campus.
+
+\section{Cartographie et représentation spatiale}
+
+\subsection{Cartographie numérique}
+
+La cartographie numérique consiste à représenter un environnement réel sous une forme exploitable
+par un système informatique. Dans le contexte de la navigation intérieure, cette représentation
+doit permettre d'identifier les espaces, les passages et les connexions entre les différentes
+zones du bâtiment.
+
+Une carte intérieure doit notamment représenter les éléments nécessaires au déplacement : salles,
+couloirs, escaliers, ascenseurs, entrées et autres points importants. Elle peut également contenir
+des informations sémantiques associant une position à une fonction (« laboratoire », « bureau »,
+« amphithéâtre »).
+
+\subsection{Cartographie vectorielle}
+
+Les données vectorielles représentent les éléments géographiques à l'aide de points, de lignes et
+de polygones. Cette approche est particulièrement adaptée aux plans de bâtiments car elle permet de
+représenter précisément les contours et les connexions entre les éléments.
+
+Contrairement à une image matricielle, une représentation vectorielle peut être agrandie sans
+perte de qualité — propriété essentielle lorsque l'utilisateur zoome sur le plan — et peut être
+manipulée directement par une application web.
+
+\subsection{SVG et Inkscape}
+
+Le format SVG (\emph{Scalable Vector Graphics}) est particulièrement adapté à l'affichage de plans
+interactifs dans une application web. Un plan SVG peut être affiché comme fond de carte, et une
+seconde couche SVG partageant le même repère (\texttt{viewBox}) peut y superposer l'itinéraire, la
+position de l'utilisateur et des marqueurs.
+
+Dans Campus Navigator, les plans des quatre niveaux ont été conçus avec l'éditeur vectoriel
+Inkscape, puis intégrés dans l'interface web. Cette approche permet de conserver une
+représentation visuelle légère et personnalisable sans introduire la complexité d'un SIG complet.
+
+\begin{table}[h]
+\centering
+\caption{Principales approches de représentation cartographique}
+\label{tab:carto}
+\small
+\begin{tabularx}{\linewidth}{@{}lXX@{}}
+\toprule
+\textbf{Approche} & \textbf{Caractéristique} & \textbf{Usage possible}\\
+\midrule
+\textbf{Image raster} & Image fixe composée de pixels & Plan simple\\
+\textbf{SVG} & Format vectoriel interactif & Plan intérieur interactif\\
+\textbf{GeoJSON} & Données géographiques structurées & Données spatiales\\
+\textbf{Vector tiles} & Données vectorielles distribuées par tuiles & Cartographie à grande échelle\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Pour un environnement universitaire de taille limitée, le SVG présente un compromis intéressant
+entre précision graphique, simplicité de manipulation et intégration dans une application web.
+
+\section{Modélisation et calcul d'itinéraires}
+
+\subsection{Théorie des graphes appliquée à la navigation}
+
+Le calcul d'un itinéraire peut être modélisé comme un problème de recherche de chemin dans un
+graphe $G = (V, E)$. Les lieux ou points de passage sont représentés par des sommets $v \in V$ et
+les connexions possibles par des arêtes $e \in E$.
+
+Dans un bâtiment, un sommet peut correspondre à une salle, une intersection de couloir, une entrée
+ou un escalier. Une arête représente une possibilité de déplacement entre deux sommets et est
+associée à un poids $w(e) \geq 0$ représentant une distance ou un coût de déplacement.
+
+Cette modélisation transforme le problème physique de navigation en un problème algorithmique de
+recherche de chemin.
+
+\subsection{Algorithme de Dijkstra}
+
+L'algorithme de Dijkstra est un algorithme classique de recherche des plus courts chemins dans un
+graphe pondéré à poids non négatifs. Il calcule le chemin $P = (v_0, \ldots, v_k)$ minimisant le
+coût total $\sum_{i=0}^{k-1} w(v_i, v_{i+1})$ entre un point de départ et une destination.
+
+Si les poids représentent les distances entre les différents points, le résultat correspond au
+chemin de distance minimale. Son principal avantage est sa simplicité et sa robustesse ; sur un
+graphe de quelques centaines de sommets comme celui d'un campus, son temps d'exécution est
+négligeable.
+
+\subsection{Algorithme A*}
+
+L'algorithme A* combine le coût déjà parcouru avec une estimation (heuristique) du coût restant
+jusqu'à la destination. Grâce à cette heuristique, il explore une partie plus ciblée du graphe que
+Dijkstra lorsque l'heuristique est adaptée. Il est largement utilisé dans les systèmes de
+navigation et les environnements interactifs de grande taille.
+
+\subsection{Bibliothèques et moteurs de routage}
+
+Plusieurs bibliothèques et moteurs spécialisés peuvent être utilisés pour implémenter la recherche
+d'itinéraires. NetworkX fournit des structures de graphes et plusieurs algorithmes de recherche de
+chemin directement utilisables en Python.
+
+Pour des systèmes plus importants ou nécessitant une infrastructure géospatiale avancée, des
+solutions telles que pgRouting, GraphHopper ou OSRM peuvent être envisagées, selon la taille du
+graphe, le volume de requêtes et le niveau d'intégration avec les données géographiques.
+
+\begin{table}[h]
+\centering
+\caption{Comparaison des principales approches de routage}
+\label{tab:routage}
+\small
+\begin{tabularx}{\linewidth}{@{}lXX@{}}
+\toprule
+\textbf{Approche} & \textbf{Principe} & \textbf{Utilisation}\\
+\midrule
+\textbf{Dijkstra} & Recherche du plus court chemin & Graphes pondérés\\
+\textbf{A*} & Recherche guidée par une heuristique & Navigation à grande échelle\\
+\textbf{NetworkX} & Bibliothèque Python de graphes & Prototypage et applications Python\\
+\textbf{pgRouting} & Routage associé à PostgreSQL/PostGIS & Données spatiales importantes\\
+\textbf{GraphHopper / OSRM} & Moteurs de routage spécialisés & Services de navigation\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Dans Campus Navigator, la représentation du campus sous forme de graphe dissocie clairement les
+données cartographiques de la logique de calcul d'itinéraire : le système identifie une
+destination puis recherche le chemin correspondant dans le graphe.
+
+\section{Intelligence artificielle et interaction en langage naturel}
+
+\subsection{Intelligence artificielle dans les systèmes de navigation}
+
+L'intelligence artificielle peut intervenir à différentes étapes d'un système de navigation :
+analyse des préférences de l'utilisateur, interprétation d'informations textuelles ou génération
+des instructions de déplacement. Dans le cadre d'une navigation intérieure, elle est
+particulièrement intéressante lorsque l'utilisateur interagit avec le système en langage naturel.
+
+\subsection{Modèles de langage}
+
+Les grands modèles de langage (LLM) sont capables d'analyser des requêtes formulées naturellement
+et d'en extraire des informations pertinentes. Un utilisateur peut exprimer une demande sous une
+forme différente de celle utilisée dans la base de données ; le modèle peut alors identifier
+l'intention et faire correspondre la requête à une destination connue. Il peut également
+reformuler une suite de points de passage en instructions de marche naturelles.
+
+L'utilisation d'un LLM ne remplace cependant pas le moteur de routage. Le rôle du modèle est limité
+à l'interprétation de la requête et à la rédaction, tandis que le calcul du chemin reste effectué
+par un algorithme déterministe. Les sorties du modèle doivent par ailleurs être contrôlées, car il
+peut produire des réponses mal formées ou inventer des informations.
+
+\subsection{Recherche sémantique et correspondance approximative}
+
+Lorsque les noms des lieux sont nombreux ou que les utilisateurs emploient des formulations
+différentes, une recherche sémantique (embeddings, bases vectorielles) peut améliorer la
+correspondance entre une requête et les destinations disponibles.
+
+Pour un nombre limité de destinations, des techniques plus simples peuvent suffire : normalisation
+du texte (minuscules, suppression des accents et de la ponctuation), recherche des mots-clés d'un
+nom de lieu dans la requête, et mesure de similarité entre chaînes de caractères (par exemple le
+ratio de la bibliothèque Python \texttt{difflib}) pour tolérer les fautes de frappe. C'est cette
+approche qui sert de mécanisme de repli dans Campus Navigator.
+
+\subsection{Services d'inférence LLM}
+
+Des services d'inférence tels que Groq donnent accès à des modèles de langage hébergés sur une
+infrastructure externe, ce qui évite d'exécuter localement un modèle volumineux.
+
+L'utilisation d'un service externe introduit des contraintes liées à la connexion Internet, à la
+latence, aux limites d'utilisation et à la confidentialité des données transmises. Une
+architecture robuste doit donc prévoir un comportement de secours lorsque le service n'est pas
+disponible.
+
+Dans Campus Navigator, plusieurs modèles ont été utilisés successivement. Une première version
+reposait sur l'API Gemini de Google, abandonnée en raison de limites de quota (voir
+section~\ref{sec:llm}), au profit de l'API Groq. Le premier modèle retenu,
+\texttt{llama-3.1-8b-instant} (famille Llama~3.1 de Meta, 8 milliards de paramètres), a été
+choisi pour sa faible latence. Il a ensuite été remplacé par \texttt{openai/gpt-oss-20b}, puis par
+\texttt{openai/gpt-oss-120b}, modèles à poids ouverts publiés par OpenAI en 2025, la version de
+plus grande taille produisant des instructions nettement plus fiables. Le modèle est désormais un
+simple paramètre de configuration (variable d'environnement \texttt{GROQ\_MODEL}), sans
+modification de l'architecture d'appel.
+
+\section{Technologies de développement web}
+
+\subsection{Architecture client-serveur}
+
+Une application de navigation web peut être organisée selon une architecture client-serveur. Le
+client correspond à l'interface utilisée pour rechercher une destination, visualiser le plan et
+suivre le guidage ; le serveur prend en charge la logique applicative et le traitement des
+requêtes. Cette séparation rend les composants indépendants et facilite leur évolution.
+
+\subsection{React}
+
+React est une bibliothèque JavaScript destinée à la construction d'interfaces utilisateur. Son
+approche basée sur des composants et des \emph{hooks} permet de décomposer une application en
+éléments réutilisables et de gérer un état complexe : historique de conversation, position de
+l'utilisateur, caméra de la carte, abonnements aux capteurs.
+
+\subsection{Vite}
+
+Vite est un outil de développement et de construction d'applications web. Il fournit un serveur de
+développement rapide et produit une version optimisée de l'application pour la production. Dans
+Campus Navigator, il est configuré pour servir l'application en HTTPS pendant le développement et
+pour relayer les appels \texttt{/api} vers le backend.
+
+\subsection{FastAPI}
+
+FastAPI est un framework Python destiné au développement d'API web. Il s'appuie sur Pydantic pour
+la validation des données reçues et génère automatiquement la documentation des endpoints. Dans
+Campus Navigator, il reçoit les demandes de navigation, interroge le graphe, appelle le modèle de
+langage et sert également, en production, les fichiers statiques de l'application React.
+
+\subsection{Node.js}
+
+Node.js est un environnement d'exécution JavaScript fonctionnant en dehors du navigateur. Il est
+accompagné du gestionnaire de paquets npm et constitue l'outillage sur lequel reposent Vite et
+React lors du développement et de la compilation. Dans Campus Navigator, il intervient uniquement
+à la construction du frontend ; la génération des QR Codes, initialement réalisée avec Node.js, a
+été réécrite en Python afin de lire directement le classeur de données.
+
+\subsection{Conteneurisation et hébergement}
+
+Docker permet d'empaqueter une application et ses dépendances dans une image exécutable à
+l'identique sur n'importe quel serveur. Une construction en plusieurs étapes (\emph{multi-stage
+build}) permet de compiler le frontend dans une image Node.js, puis de ne conserver que le résultat
+dans une image Python légère qui exécute l'API.
+
+Des plateformes d'hébergement telles que Render déploient directement une image Docker à partir
+d'un dépôt Git et fournissent automatiquement une adresse HTTPS, condition nécessaire pour
+accéder au GPS et aux capteurs de mouvement depuis un navigateur mobile.
+
+\begin{table}[h]
+\centering
+\caption{Technologies utilisées dans l'architecture web}
+\label{tab:web}
+\small
+\begin{tabularx}{\linewidth}{@{}lXX@{}}
+\toprule
+\textbf{Technologie} & \textbf{Rôle principal} & \textbf{Contribution au projet}\\
+\midrule
+\textbf{React} & Interface utilisateur & Chat, carte, guidage en temps réel\\
+\textbf{Vite} & Environnement de développement & Développement HTTPS, compilation\\
+\textbf{FastAPI} & API backend & Communication, logique serveur, service du site\\
+\textbf{NetworkX} & Traitement des graphes & Calcul des itinéraires\\
+\textbf{SVG} & Représentation graphique & Affichage des plans\\
+\textbf{Groq / LLM} & Traitement du langage & Interprétation des demandes, rédaction des instructions\\
+\textbf{API Web (Geolocation, DeviceMotion)} & Capteurs du téléphone & Suivi de la position\\
+\textbf{Python (qrcode)} & Script utilitaire & Génération des QR Codes\\
+\textbf{Docker / Render} & Conteneurisation, hébergement & Mise en ligne en HTTPS\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Cette combinaison sépare les responsabilités : React prend en charge l'expérience utilisateur et
+le suivi de la position, FastAPI assure la logique serveur, tandis que les composants de calcul et
+d'intelligence artificielle réalisent les traitements spécifiques.
+
+\section{Gestion et stockage des données}
+
+\subsection{Données nécessaires}
+
+Un système de navigation intérieure repose sur plusieurs catégories de données : les lieux, les
+connexions entre les lieux et les caractéristiques des niveaux du bâtiment.
+
+Les données relatives aux lieux contiennent un identifiant, un nom, une catégorie et une position
+sur le plan. Les données relatives aux connexions permettent de construire le graphe utilisé par le
+moteur de routage.
+
+La qualité de ces données est déterminante. Un itinéraire calculé correctement à partir d'un graphe
+incomplet ou incorrect peut malgré tout être inutilisable dans le monde réel.
+
+\subsection{Fichiers tabulaires}
+
+Les fichiers tabulaires tels que les classeurs Excel constituent une solution simple pour stocker et
+modifier les informations pendant une phase de prototypage. Cette approche est accessible à des
+utilisateurs non spécialisés, mais devient moins adaptée lorsque le volume de données augmente ou
+que plusieurs personnes doivent modifier les données simultanément.
+
+Pour exploiter ces fichiers dans le backend, la bibliothèque Python \textbf{pandas} fournit la
+structure DataFrame. Dans Campus Navigator, pandas charge au démarrage du serveur les feuilles
+\emph{Floors}, \emph{Nodes}, \emph{Edges} et \emph{Locations}, tandis que la feuille
+\emph{Node\_Types} est lue par le script de génération des QR Codes. Les coordonnées GPS des nœuds
+extérieurs sont stockées séparément dans un fichier JSON.
+
+\subsection{Bases de données spatiales}
+
+Les bases de données spatiales telles que PostgreSQL avec l'extension PostGIS permettent de stocker
+et de manipuler des données géographiques de manière structurée. Elles deviennent pertinentes
+lorsque le projet doit gérer plusieurs bâtiments, des géométries complexes ou des requêtes
+spatiales avancées.
+
+\subsection{Bases orientées graphes}
+
+Les bases de données orientées graphes représentent directement les relations entre les éléments.
+Elles sont intéressantes pour des environnements complexes dans lesquels les relations entre les
+lieux constituent une partie essentielle du modèle de données.
+
+\begin{table}[h]
+\centering
+\caption{Comparaison des solutions de stockage}
+\label{tab:stockage}
+\small
+\begin{tabularx}{\linewidth}{@{}lXX@{}}
+\toprule
+\textbf{Solution} & \textbf{Avantage principal} & \textbf{Limite principale}\\
+\midrule
+\textbf{Excel / fichiers tabulaires} & Simplicité de modification & Scalabilité limitée\\
+\textbf{PostgreSQL / PostGIS} & Gestion structurée des données spatiales & Mise en place plus complexe\\
+\textbf{Base orientée graphe} & Représentation naturelle des relations & Infrastructure spécialisée\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Pour un prototype de taille limitée, une structure tabulaire constitue donc un choix pragmatique.
+Une évolution vers une base spécialisée pourrait être envisagée si le nombre de bâtiments, de lieux
+et de requêtes augmente.
+
+\subsection{Contrôle de la qualité des données et Power BI}
+
+\textbf{Power BI} est un outil d'analyse et de visualisation de données développé par Microsoft.
+Il permet d'importer des sources variées (dont des classeurs Excel), de définir un modèle de données
+relationnel entre plusieurs tables, puis de construire des tableaux de bord interactifs. Les
+indicateurs et colonnes calculées y sont définis grâce au langage \textbf{DAX} (\emph{Data Analysis
+Expressions}).
+
+Bien qu'il soit principalement destiné à l'analyse décisionnelle, Power BI peut être utilisé pour
+auditer la qualité d'un jeu de données : détection de doublons, de références manquantes ou de
+valeurs incohérentes. Cet usage est pertinent dans un projet de navigation, où la qualité du graphe
+conditionne directement la fiabilité des itinéraires. Dans Campus Navigator, il a servi à contrôler
+la cohérence du classeur Excel avant et pendant le développement (voir section~\ref{sec:bdd}).
+
+\section{Étude comparative des solutions existantes}
+
+\subsection{Solutions commerciales de navigation intérieure}
+
+Le marché comprend plusieurs plateformes proposant des fonctionnalités de cartographie et de
+navigation intérieure. Des solutions telles que Mapbox, HERE, Esri Indoors ou Pointr illustrent
+différentes approches permettant d'intégrer des cartes intérieures dans des applications
+numériques.
+
+Ces plateformes proposent des fonctionnalités avancées de cartographie, de gestion des bâtiments
+ou de localisation, et fournissent des composants déjà développés. Cependant, leur utilisation peut
+nécessiter des données cartographiques spécifiques, des abonnements, des services externes ou une
+infrastructure de localisation (balises), et le degré de personnalisation dépend de chaque
+plateforme.
+
+\subsection{Approches open source et moteurs de routage}
+
+Plusieurs technologies open source permettent de construire des systèmes de routage personnalisés.
+Des outils tels que NetworkX, pgRouting, GraphHopper ou OSRM fournissent différents niveaux de
+fonctionnalités pour représenter des graphes et calculer des itinéraires. Ces solutions sont
+particulièrement intéressantes dans un contexte académique puisqu'elles permettent de conserver un
+contrôle important sur la logique de traitement.
+
+\subsection{Comparaison synthétique}
+
+\begin{table}[h]
+\centering
+\caption{Comparaison synthétique des approches}
+\label{tab:compar}
+\small
+\begin{tabularx}{\linewidth}{|X|X|X|X|}
+\hline
+\textbf{Approche} & \textbf{Cartographie} & \textbf{Routage} & \textbf{Personnalisation}\\
+\hline
+Plateformes commerciales & Avancée & Intégré ou disponible & Variable\\
+\hline
+Moteurs open source & Variable & Avancé & Élevée\\
+\hline
+Approche personnalisée & Adaptée au besoin & Développé selon le projet & Très élevée\\
+\hline
+Campus Navigator & Plans SVG dédiés & Graphe personnalisé, guidage temps réel & Adaptée au campus\\
+\hline
+\end{tabularx}
+\end{table}
+
+Cette comparaison montre qu'il existe plusieurs niveaux d'abstraction. Les plateformes commerciales
+cherchent à fournir une solution complète, alors qu'une approche personnalisée permet de
+construire uniquement les fonctionnalités nécessaires au contexte étudié.
+
+\section{Synthèse et positionnement de Campus Navigator}
+
+L'étude des différentes technologies permet de mieux comprendre les choix effectués pour la
+conception de Campus Navigator. Le projet se situe dans une approche de navigation légère et
+personnalisée, destinée à un environnement universitaire déterminé, et volontairement sans
+infrastructure matérielle.
+
+La représentation des bâtiments sous forme de plans vectoriels fournit une visualisation claire et
+adaptée à l'environnement étudié. La structure de graphe représente les relations entre les points
+du campus et permet de calculer un itinéraire entre une position de départ et une destination.
+
+L'interface web rend le système accessible à partir d'un simple navigateur, sans installation.
+React assure la construction de l'interface et le suivi de la position, tandis que FastAPI fournit
+la couche backend.
+
+L'intégration d'un modèle de langage ajoute une dimension conversationnelle : l'utilisateur
+formule sa demande de manière naturelle, puis le système identifie la destination correspondante
+avant de déclencher le calcul de l'itinéraire. Des mécanismes de repli locaux garantissent que le
+service reste disponible même sans le modèle.
+
+Pour la localisation, la solution combine trois sources complémentaires et peu coûteuses : le QR
+Code pour le point de départ, le GPS sur les tronçons extérieurs et la podométrie à l'intérieur,
+contrainte par l'itinéraire connu.
+
+Cette architecture présente l'avantage de rester relativement simple tout en séparant les
+différentes responsabilités du système. Elle constitue une base adaptée à un prototype académique,
+tout en laissant la possibilité d'évolutions futures concernant la localisation intérieure, le
+stockage des données, la recherche sémantique ou la mise à l'échelle.
+
+\section{Conclusion}
+
+L'état de l'art présenté dans ce chapitre met en évidence le caractère multidisciplinaire de la
+navigation intérieure. Une telle solution ne repose pas sur une technologie unique, mais sur
+l'intégration de plusieurs composants permettant de représenter l'environnement, déterminer la
+position de l'utilisateur, rechercher un itinéraire et présenter le résultat.
+
+Les technologies de localisation telles que le Wi-Fi, le Bluetooth Low Energy et l'UWB offrent
+différentes possibilités de positionnement, au prix d'une infrastructure dédiée, tandis que les QR
+Codes, le GPS et les capteurs inertiels des smartphones permettent une approche sans matériel
+supplémentaire. Sur le plan cartographique, les représentations vectorielles et notamment le format
+SVG permettent de construire des plans interactifs adaptés à une application web.
+
+La théorie des graphes fournit un modèle approprié pour représenter les connexions entre les
+espaces d'un bâtiment, et les algorithmes tels que Dijkstra et A* permettent d'y rechercher des
+chemins optimaux.
+
+L'intelligence artificielle apporte une dimension complémentaire en facilitant l'interaction en
+langage naturel. Cette approche doit toutefois être accompagnée de mécanismes de contrôle et de
+repli afin de limiter les erreurs d'interprétation et la dépendance à un service externe.
+
+Enfin, l'association de React, Vite, FastAPI, NetworkX, SVG, d'un service d'inférence LLM et d'un
+hébergement conteneurisé permet de construire une architecture cohérente pour le prototype
+Campus Navigator. Le chapitre suivant présente la conception détaillée du système, son
+architecture, ses composants et leur interaction.
+
+% =====================================================================
+% Chapitre 3
+% =====================================================================
+\chapter{Méthodologie et mise en œuvre}
+
+Ce chapitre présente la démarche méthodologique suivie pour la mise en œuvre du système. Il
+détaille successivement la mise en place de l'environnement de développement et le choix de la
+pile technologique, la conception de la base de données ayant servi à modéliser le campus, le
+pipeline de traitement qui relie la requête de l'utilisateur à l'itinéraire, le module de
+navigation en temps réel exécuté sur le téléphone, puis le déploiement de l'application.
+L'objectif est de présenter non seulement les choix effectués, mais également leur justification
+au regard des contraintes du projet.
+
+\section{Mise en place de l'environnement de développement}
+
+Le développement du système repose sur une architecture client-serveur découplée, choisie afin de
+séparer clairement la logique métier (identification de la destination, calcul d'itinéraire,
+rédaction des instructions) de la couche de présentation (interface conversationnelle, affichage
+cartographique, suivi de la position).
+
+Le backend a été développé en Python avec le framework FastAPI, retenu pour sa légèreté, sa
+validation native des données (via Pydantic) et sa facilité d'exposition d'endpoints REST.
+L'endpoint de navigation est déclaré comme fonction synchrone : FastAPI l'exécute alors dans un
+fil d'exécution séparé, ce qui évite que les appels bloquants au modèle de langage ne paralysent
+le serveur. Le calcul du plus court chemin repose sur NetworkX, qui permet de modéliser le campus
+sous forme de graphe pondéré et d'appliquer directement l'algorithme de Dijkstra.
+
+Le frontend a été développé en React et construit avec Vite. Il est organisé en trois modules : le
+composant de chat (\texttt{AdminChat.jsx}), le composant de navigation en temps réel
+(\texttt{LiveNavigation.jsx}) et un module de calculs purs, indépendant de React
+(\texttt{navMath.js}), regroupant la géométrie le long de l'itinéraire, la détection de pas et les
+projections GPS. Pendant le développement, Vite sert l'application en HTTPS (certificat
+auto-signé), condition imposée par les téléphones pour accéder au GPS et aux capteurs de
+mouvement, et relaie les appels \texttt{/api} vers le backend.
+
+L'intégration de l'intelligence artificielle repose sur l'API Groq, utilisée pour l'extraction de
+la destination et pour la rédaction des instructions de navigation. La clé d'accès est fournie par
+une variable d'environnement (\texttt{GROQ\_API\_KEY}), jamais versionnée ; en son absence,
+l'application fonctionne avec ses mécanismes de repli locaux.
+
+\begin{table}[h]
+\centering
+\caption{Architecture technique et composants du système}
+\label{tab:archi}
+\small
+\begin{tabularx}{\linewidth}{|p{3.4cm}|p{3.6cm}|X|}
+\hline
+\textbf{Composant} & \textbf{Technologie} & \textbf{Rôle}\\
+\hline
+Backend & FastAPI (Python) & Endpoints REST (\texttt{/api/navigate}, \texttt{/api/floorplan}, \texttt{/api/geo}, \texttt{/api/health}), orchestration du pipeline, service du site compilé\\
+\hline
+Modélisation du graphe & NetworkX & Graphe pondéré du campus, plus court chemin (Dijkstra)\\
+\hline
+Traitement du langage naturel & Groq (modèle \texttt{openai/gpt-oss-120b}, configurable) & Extraction de la destination, rédaction des instructions de navigation\\
+\hline
+Repli local & Python (\texttt{unicodedata}, \texttt{difflib}) & Correspondance approximative des lieux, instructions générées par règles\\
+\hline
+Frontend & React, Vite & Interface conversationnelle, carte interactive, guidage en temps réel\\
+\hline
+Localisation & API Geolocation, DeviceMotion & GPS sur les tronçons extérieurs, podomètre à l'intérieur\\
+\hline
+Stockage des données & Excel / pandas, JSON & Données du campus (nœuds, arêtes, lieux, étages), coordonnées GPS des nœuds extérieurs\\
+\hline
+Génération des QR Codes & Python (\texttt{qrcode}, \texttt{openpyxl}) & Un QR Code par écran, encodant l'adresse publique et le nœud de départ\\
+\hline
+Édition des plans & Inkscape / SVG & Plans vectoriels des quatre niveaux, support du tracé\\
+\hline
+Déploiement & Docker, Render & Image unique (site + API) servie en HTTPS\\
+\hline
+\end{tabularx}
+\end{table}
+
+\section{Conception de la base de données}
+\label{sec:bdd}
+
+La base de données du campus a été conçue sous forme de classeur Excel (\texttt{Book\_4.xlsx})
+structuré en plusieurs feuilles interdépendantes, un choix motivé par la nécessité de disposer
+d'un format facilement modifiable et vérifiable manuellement pendant la collecte des données sur le
+terrain, avant tout développement logiciel.
+
+Le classeur comprend cinq feuilles :
+\begin{itemize}
+  \item \textbf{Floors} : 19 niveaux, chacun correspondant au couple (bâtiment, étage). Le campus
+  est découpé en 11 bâtiments (bâtiment administratif, atelier, bâtiment de l'amphithéâtre,
+  département électrique, amphithéâtres 1 à 4, salle d'étude, service des affaires sociales,
+  buvette, sanitaires) et une zone extérieure (\texttt{OUTDOOR}). Chaque ligne précise le numéro
+  d'étage et le nombre d'étages du bâtiment (jusqu'à quatre pour le département électrique).
+  \item \textbf{Nodes} : 145 points de passage, caractérisés par un identifiant unique
+  (\texttt{Node\_Id}), des coordonnées $(x, y)$ relevées sur les plans, un niveau
+  d'appartenance (\texttt{floor\_id}) et une description textuelle décrivant un repère visible
+  (« en face de la salle B5 », « escalier menant au 1er étage\ldots »). Cette description est
+  réutilisée pour rédiger les instructions.
+  \item \textbf{Edges} : 174 connexions entre deux nœuds, pondérées par une longueur
+  (\texttt{Weight}, interprétée en mètres) et typées (\texttt{Edge\_Type}) : 114 couloirs
+  (\texttt{corridor}), 49 allées extérieures (\texttt{outdoor}) et 11 escaliers
+  (\texttt{stairs}).
+  \item \textbf{Locations} : les 68 lieux nommés du campus, chacun rattaché à un nœud du graphe,
+  avec une catégorie et des alias (noms alternatifs séparés par des virgules ou des
+  points-virgules). Cette feuille constitue le référentiel interrogé lors de l'extraction de la
+  destination.
+  \item \textbf{Node\_Types} : la typologie des nœuds : accès à un point d'intérêt
+  (\texttt{poi\_access}), intersection, escalier (\texttt{stairs}), point de passage
+  (\texttt{waypoint}) et point d'entrée (\texttt{entry\_point}). Les six points d'entrée
+  (N3, N77, N87, N88, N114, N142) correspondent aux écrans du campus sur lesquels sont affichés les
+  QR Codes.
+\end{itemize}
+
+Ce classeur est complété par un fichier \texttt{geo.json} associant à 31 nœuds extérieurs leurs
+coordonnées GPS (latitude, longitude), relevées sur le terrain. Ces coordonnées permettent de
+suivre l'utilisateur par GPS sur les tronçons extérieurs de l'itinéraire (section~\ref{sec:live}).
+
+\begin{figure}[h]
+\centering
+\img{0.85\linewidth}{powerbi_modele.png}
+\caption{Schéma du modèle de données cartographique extrait de la plateforme Power BI}
+\label{fig:modele}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\img{0.95\linewidth}{excel_nodes.png}
+\caption{Extrait de la feuille Nodes, montrant les colonnes Node\_Id, x, y, floor\_id, Description}
+\label{fig:nodes}
+\end{figure}
+
+Afin de systématiser le contrôle de cette base, un tableau de bord Power BI a été construit,
+structuré en deux pages. La première, présentée en Figure~\ref{fig:pbi1}, propose une série
+d'indicateurs synthétiques : nombre total de nœuds, d'arêtes et de points d'intérêt, nœuds
+orphelins (\emph{Orphan Nodes}), arêtes invalides (\emph{Invalid\_Edges}), coordonnées ou étages
+manquants (\emph{Missing\_Coordinates}, \emph{Missing\_Floors}) et doublons d'identifiants
+(\emph{Duplicates in Nodes}). La seconde, présentée en Figure~\ref{fig:pbi2}, détaille ces
+anomalies ligne par ligne à l'aide de colonnes calculées (\emph{Edge\_Valid},
+\emph{From\_Node\_Valid}, \emph{To\_Node\_Valid}, \emph{Self\_Loop},
+\emph{Duplicate\_Edge\_Count}), permettant d'identifier précisément quelles arêtes référencent
+un nœud inexistant, quelles arêtes forment une boucle, ou quels identifiants sont dupliqués, avant
+leur correction dans le fichier source.
+
+\begin{figure}[h]
+\centering
+\img{0.75\linewidth}{powerbi_qualite.png}
+\caption{Vue d'ensemble de la qualité des données (tableau de bord Power BI)}
+\label{fig:pbi1}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\img{0.85\linewidth}{powerbi_integrite.png}
+\caption{Contrôle de l'intégrité du graphe (tableau de bord Power BI)}
+\label{fig:pbi2}
+\end{figure}
+
+Au-delà de ces contrôles structurés, le tableau de bord a également été utilisé de manière
+exploratoire, afin de retrouver l'origine d'incohérences repérées lors des tests de l'application.
+La Figure~\ref{fig:e67} illustre un tel cas : en filtrant les tables sur les nœuds N88 et
+\texttt{To\_Node = N7}, il a été possible d'isoler l'arête à l'origine du problème : E67 (N88
+$\rightarrow$ N7, type \texttt{corridor}). Cette arête reliait un nœud intérieur du bâtiment (N88),
+sans accès direct vers l'extérieur, à un nœud extérieur (N7) : une connexion qui ne correspond à
+aucun passage physique réel. Cette erreur de saisie n'était pas détectable par les contrôles
+structurels (les deux nœuds existaient, et aucune boucle ni duplication n'était en cause), mais
+l'algorithme de plus court chemin proposait, pour certains trajets, un itinéraire empruntant cette
+arête, plaçant l'utilisateur face à une instruction impossible à suivre. Ce cas illustre une limite
+propre à ce type de contrôle : la validité structurelle d'un graphe ne garantit pas sa cohérence
+sémantique par rapport à la réalité physique qu'il modélise, ce qui a conduit à compléter les
+vérifications automatisées par une revue manuelle ciblée des arêtes reliant l'intérieur à
+l'extérieur.
+
+\begin{figure}[h]
+\centering
+\img{0.85\linewidth}{powerbi_e67.png}
+\caption{Capture d'écran « Search for Inconsistencies » isolant l'arête E67}
+\label{fig:e67}
+\end{figure}
+
+Les Figures~\ref{fig:pbi1} à~\ref{fig:e67} correspondent à des captures réalisées à différents
+stades du contrôle, avant la correction complète des données. Dans l'état actuel du classeur, le
+graphe chargé par NetworkX est connexe : 144 nœuds reliés par 172 connexions distinctes (deux
+lignes de la feuille \emph{Edges} décrivant une même connexion sont fusionnées par le graphe non
+orienté). Un seul nœud, N129, reste isolé et n'est donc jamais proposé dans un itinéraire.
+
+\section{Pipeline de traitement}
+
+Le fonctionnement du système repose sur un pipeline en six étapes, depuis l'identification du
+point de départ jusqu'au guidage de l'utilisateur (Figure~\ref{fig:sequence}).
+
+\begin{enumerate}
+  \item \textbf{Identification du point de départ.} L'utilisateur scanne un QR Code affiché sur un
+  écran du campus. Ce code encode l'adresse publique de l'application, paramétrée avec
+  l'identifiant du nœud correspondant (par exemple \texttt{?start=N114}). Si l'utilisateur
+  rescanne un code en cours de trajet, l'application lui propose de reprendre l'itinéraire
+  précédent depuis ce nouveau point (la dernière destination est conservée trente minutes dans le
+  stockage local du navigateur).
+
+  \item \textbf{Formulation de la requête.} L'utilisateur exprime sa destination en langage
+  naturel via l'interface de chat (ex. « Où se trouve la salle B7 ? »), en français ou en anglais.
+  La requête part toujours de la position courante de l'utilisateur, mise à jour pendant la marche,
+  et non du QR Code initial.
+
+  \item \textbf{Extraction de la destination.} La requête est d'abord transmise au modèle de
+  langage, avec la liste des lieux (nom, alias, nœud), en lui demandant de ne répondre que par un
+  identifiant de nœud (température nulle) ; l'identifiant est extrait de la réponse par expression
+  régulière (\texttt{N\textbackslash d+}) puis vérifié dans le graphe. Si le modèle n'est pas
+  disponible ou ne trouve rien, une recherche locale prend le relais :
+  \begin{itemize}
+    \item normalisation du texte (minuscules, suppression des accents et de la ponctuation) ;
+    \item recherche d'un nom ou alias de lieu dont tous les mots significatifs (hors mots vides
+    tels que « de », « la », « salle ») figurent dans la requête, en privilégiant la
+    correspondance la plus longue ;
+    \item à défaut, recherche d'un radical de mot propre à un seul lieu (ex. « bibliothèques »
+    $\rightarrow$ « bibliotheque ») ;
+    \item enfin, similarité de chaînes (\texttt{difflib}), acceptée uniquement au-delà d'un ratio
+    de 0{,}85 pour éviter les correspondances hasardeuses.
+  \end{itemize}
+
+  \item \textbf{Calcul de l'itinéraire.} Le nœud de départ et le nœud de destination sont soumis à
+  l'algorithme de Dijkstra (\texttt{nx.dijkstra\_path}, pondéré par la longueur des arêtes),
+  produisant la séquence ordonnée de nœuds à parcourir. Les cas particuliers renvoient un code
+  d'erreur explicite : départ inconnu (\texttt{bad\_start}), destination introuvable
+  (\texttt{not\_found}), utilisateur déjà sur place (\texttt{already\_there}) ou absence de chemin
+  (\texttt{no\_path}).
+
+  \item \textbf{Génération des instructions.} Le serveur produit \emph{exactement une instruction
+  par nœud} du chemin (l'instruction $k$ explique comment atteindre le nœud $k$), ce qui permet au
+  frontend d'afficher l'instruction correspondant à la position courante. Pour chaque nœud, il
+  construit une ligne de contexte : le lieu (bâtiment et étage), le repère tiré de la description
+  du nœud et, le cas échéant, le changement calculé de façon déterministe par rapport au nœud
+  précédent (« Sortez du bâtiment », « Entrez dans : \ldots », « Montez l'escalier jusqu'au 1er
+  étage »). Ces lignes sont transmises au modèle de langage avec des règles de rédaction
+  (impératif, une phrase courte par étape, aucun identifiant technique, ne mentionner un escalier
+  à monter que si un changement d'étage est indiqué), en mode de réponse JSON. La réponse est
+  ensuite contrôlée : le nombre d'instructions doit être égal au nombre de nœuds, les identifiants
+  techniques éventuels sont remplacés, « étage 0 » devient « rez-de-chaussée », et la dernière
+  instruction doit annoncer l'arrivée. Si l'un de ces contrôles échoue, ou si le modèle est
+  indisponible, des instructions générées par règles, à partir des mêmes lignes de contexte, sont
+  utilisées.
+
+  \item \textbf{Restitution et guidage.} Le backend retourne l'itinéraire enrichi de métadonnées
+  par nœud ; le frontend l'affiche sur les plans des étages concernés et guide l'utilisateur en
+  temps réel (section~\ref{sec:live}).
+\end{enumerate}
+
+\begin{figure}[h]
+\centering
+\resizebox{\linewidth}{!}{%
+\begin{tikzpicture}[
+  font=\sffamily\small,
+  actor/.style={draw, fill=blue!8, rounded corners=2pt, minimum width=2.5cm, minimum height=0.8cm, align=center},
+  msg/.style={-{Stealth[length=2.2mm]}, thick},
+  ret/.style={-{Stealth[length=2.2mm]}, dashed},
+  note/.style={draw, fill=yellow!20, font=\sffamily\scriptsize, align=left, inner sep=2pt},
+]
+  \tikzset{every node/.append style={fill=white, inner sep=1.5pt}}
+  \foreach \name/\x/\label in {u/0/Utilisateur, qr/3/{Écran -- QR Code}, fe/6.5/Frontend (React), be/10.5/Backend (FastAPI), llm/14/API Groq (LLM), nx/17/NetworkX}{
+    \node[actor] (\name) at (\x,0) {\label};
+    \draw[dashed, gray] (\x,-0.4) -- (\x,-14.2);
+  }
+  \draw[msg] (0,-1) -- node[above]{1 Scanne le QR Code} (3,-1);
+  \draw[msg] (3,-1.7) -- node[above]{2 Ouvre l'URL \texttt{?start=N114}} (6.5,-1.7);
+  \draw[msg] (0,-2.6) -- node[above]{3 Formule sa destination} (6.5,-2.6);
+  \draw[msg] (6.5,-3.5) -- node[above]{4 POST /api/navigate \{text, startNode, lang\}} (10.5,-3.5);
+  \draw[msg] (10.5,-4.4) -- node[above]{5 Extraction de la destination} (14,-4.4);
+  \draw[ret] (14,-5.1) -- node[above]{6 Node\_Id (ou repli local)} (10.5,-5.1);
+  \draw[msg] (10.5,-6.0) -- node[above, pos=0.6]{7 dijkstra\_path(start, dest)} (17,-6.0);
+  \draw[ret] (17,-6.7) -- node[above, pos=0.4]{8 Séquence de nœuds} (10.5,-6.7);
+  \draw[msg] (10.5,-7.6) -- node[above]{9 Contexte de chaque nœud} (14,-7.6);
+  \draw[ret] (14,-8.3) -- node[above]{10 Instructions (JSON)} (10.5,-8.3);
+  \node[note, anchor=west] at (10.7,-9.0) {contrôle du nombre d'étapes,\\repli par règles si besoin};
+  \draw[ret] (10.5,-10.0) -- node[above]{11 \{path, pathMeta, edgeMeters, steps\}} (6.5,-10.0);
+  \draw[ret] (6.5,-10.9) -- node[above]{12 Trajet sur le plan + instruction} (0,-10.9);
+  \draw[msg] (0,-11.8) -- node[above]{13 Marche (GPS / pas détectés)} (6.5,-11.8);
+  \draw[ret] (6.5,-12.6) -- node[above]{14 Position, étage et instruction mis à jour} (0,-12.6);
+  \draw[msg] (6.5,-13.5) -- node[above]{15 Écart au trajet : POST /api/navigate \{destNode\}} (10.5,-13.5);
+\end{tikzpicture}}
+\caption{Diagramme de séquence illustrant le pipeline de traitement}
+\label{fig:sequence}
+\end{figure}
+
+\begin{table}[h]
+\centering
+\caption{Spécifications des endpoints et paramètres de l'API REST}
+\label{tab:api}
+\small
+\begin{tabularx}{\linewidth}{|p{4.2cm}|p{1.6cm}|X|}
+\hline
+\textbf{Endpoint} & \textbf{Méthode} & \textbf{Paramètres d'entrée}\\
+\hline
+\texttt{/api/navigate} & POST & Corps JSON : \texttt{text} (requête en langage naturel), \texttt{startNode} (nœud de départ ou position courante), \texttt{lang} (\texttt{fr} ou \texttt{en}), \texttt{destNode} (optionnel : destination déjà connue, utilisée lors d'un recalcul)\\
+\hline
+\texttt{/api/floorplan/\{level\}} & GET & Paramètre d'URL : \texttt{level} (\texttt{F0}, \texttt{F1}, \texttt{F2}, \texttt{F3} ; \texttt{OUTDOOR} est ramené à \texttt{F0})\\
+\hline
+\texttt{/api/geo} & GET & Aucun\\
+\hline
+\texttt{/api/health} & GET & Aucun\\
+\hline
+\end{tabularx}
+\end{table}
+
+L'endpoint \texttt{/api/navigate} constitue le point d'entrée principal du pipeline. Sa réponse
+contient le nom du lieu identifié (\texttt{destinationName}), le nœud de destination
+(\texttt{destinationNode}), la séquence ordonnée des nœuds (\texttt{path}), la longueur en mètres
+de chaque tronçon (\texttt{edgeMeters}), les instructions (\texttt{steps}, une par nœud) et, pour
+chaque nœud, un ensemble de métadonnées (\texttt{pathMeta}) : niveau et plan d'affichage
+(\texttt{floorId}, \texttt{mapLevel}), indicateur extérieur, nom du bâtiment, numéro d'étage et
+nombre d'étages du bâtiment, coordonnées dans le repère du plan (\texttt{x}, \texttt{y}) et, pour
+les nœuds extérieurs, coordonnées GPS (\texttt{geo}). Ces métadonnées permettent au frontend de
+dessiner le trajet, de changer de plan et d'afficher les indications d'escalier sans nouvel appel
+au serveur. En cas d'échec, la réponse se limite à un champ \texttt{error} accompagné d'un code
+(\texttt{code}) traduit par l'interface dans la langue choisie.
+
+Le Listing~\ref{lst:reponse} présente un extrait simplifié de réponse pour la requête « salle B7 »
+depuis le nœud N114 : l'itinéraire calculé compte 12 nœuds et 132 mètres, part de l'extérieur,
+traverse le bâtiment administratif, le département électrique et le bâtiment de l'amphithéâtre,
+puis monte au premier étage de l'atelier.
+
+\begin{lstlisting}[caption={Extrait simplifié d'une réponse de \texttt{/api/navigate}}, label={lst:reponse}]
+{
+  "destinationName": "Salle B7",
+  "destinationNode": "N17",
+  "path": ["N114", "N142", "N139", "N138", "N89", "N93",
+           "N92", "N91", "N79", "N15", "N16", "N17"],
+  "edgeMeters": [8, 7, 40, 5, 5, 23, 18, 10, 5, 6, 5],
+  "pathMeta": [
+    { "node": "N114", "floorId": "OUTDOOR", "mapLevel": "F0",
+      "outdoor": true, "x": 19469.4, "y": 28152.9,
+      "geo": [33.9695993, -6.8764596] },
+    ...
+  ],
+  "steps": ["Vous êtes devant ...", "...", "Vous êtes arrivé : Salle B7."]
+}
+\end{lstlisting}
+
+L'endpoint \texttt{/api/floorplan/\{level\}} répond à un besoin distinct : pour chaque niveau
+traversé, le frontend doit afficher le plan correspondant. Plutôt que de transmettre l'ensemble des
+plans en une seule fois, cet endpoint fournit à la demande le chemin du fichier SVG (\texttt{file}),
+les dimensions de référence du plan (\texttt{viewBox}) et la liste des nœuds du niveau avec leurs
+coordonnées converties dans le repère du plan (\texttt{nodes}), cette conversion correspondant à la
+calibration décrite au chapitre suivant. Les nœuds extérieurs sont dessinés sur le plan du
+rez-de-chaussée, qui représente également les abords des bâtiments. Le frontend met ces réponses
+en cache et précharge les plans de tous les niveaux d'un itinéraire, de sorte que le changement
+d'étage pendant la marche est instantané.
+
+L'endpoint \texttt{/api/geo} renvoie les nœuds extérieurs géolocalisés (coordonnées GPS et
+coordonnées sur le plan) et les allées qui les relient ; il sert à placer un point GPS sur la carte.
+Enfin, \texttt{/api/health} indique si le serveur fonctionne, si le modèle de langage est configuré
+et combien de nœuds compte le graphe ; il est utilisé par la plateforme d'hébergement pour
+surveiller le service.
+
+\section{Module de navigation en temps réel}
+\label{sec:live}
+
+Une fois l'itinéraire reçu, le composant de navigation en temps réel prend le relais sur le
+téléphone. Il affiche en permanence l'emplacement courant (« Vous êtes ici : bâtiment
+administratif · rez-de-chaussée »), l'instruction à suivre, une indication d'escalier lorsque
+l'étape suivante change d'étage, une barre de progression, la distance restante et la liste
+complète des instructions, dont les étapes franchies sont cochées.
+
+\subsection{Représentation de la position}
+
+La position de l'utilisateur n'est pas représentée par des coordonnées libres, mais par sa
+progression le long de l'itinéraire : un couple $(i, p)$ indiquant que l'utilisateur se trouve à la
+fraction $p \in [0, 1[$ du tronçon reliant le nœud $i$ au nœud $i+1$. Avancer d'une distance $d$
+consiste à consommer la longueur restante des tronçons successifs ; la distance restante jusqu'à
+la destination s'écrit :
+\begin{equation}
+D_{\text{restante}} = \sum_{j=i}^{n-1} \ell_j \; - \; p\,\ell_i
+\end{equation}
+où $\ell_j$ est la longueur (en mètres) du tronçon $j$ et $n$ le dernier nœud. Sur la carte, le
+point est interpolé linéairement entre les nœuds $i$ et $i+1$ lorsqu'ils figurent sur le même
+plan. Cette représentation contraint la position à l'itinéraire, ce qui compense en grande partie
+l'imprécision des capteurs.
+
+\subsection{Podométrie à l'intérieur}
+
+À l'intérieur, et chaque fois que le GPS n'est pas exploitable, la progression est estimée en
+comptant les pas à partir de l'accéléromètre (événement \texttt{devicemotion}). Pour chaque
+mesure, on calcule la norme de l'accélération $|a|$, dont on retire la composante de gravité
+estimée par un filtre passe-bas, puis on lisse le signal :
+\begin{align}
+g_t &= 0{,}95\, g_{t-1} + 0{,}05\, |a_t| \\
+s_t &= 0{,}6\, s_{t-1} + 0{,}4\, \big(|a_t| - g_t\big)
+\end{align}
+Un pas est détecté lorsque le signal lissé présente un maximum local supérieur à un seuil
+($1{,}2~\text{m/s}^2$), avec une période réfractaire de 300~ms entre deux pas pour éviter les
+doubles détections. Chaque pas fait avancer l'utilisateur de 0{,}7~m le long de l'itinéraire.
+
+Sur iOS, l'accès aux capteurs n'est accordé qu'à la suite d'un geste de l'utilisateur : la
+demande d'autorisation est donc déclenchée au moment où il appuie sur « Envoyer ». Si aucun
+capteur n'est disponible ou si l'accès est refusé, un message l'explique et un mode
+« Démo » simulant une marche à 5~m/s reste disponible pour les présentations.
+
+\subsection{Suivi GPS à l'extérieur}
+
+Sur les tronçons dont les deux extrémités possèdent des coordonnées GPS, la position est fournie
+par l'API de géolocalisation du navigateur en haute précision. Une mesure n'est exploitée que si
+elle date de moins de 8 secondes et que sa précision annoncée est inférieure ou égale à 30 mètres ;
+dans le cas contraire, le podomètre reste actif.
+
+Les coordonnées sont converties en mètres dans un repère local centré sur un point de référence
+$(\varphi_0, \lambda_0)$, approximation largement suffisante à l'échelle d'un campus :
+\begin{equation}
+x = R\,(\lambda - \lambda_0)\,\frac{\pi}{180}\,\cos\!\Big(\varphi_0 \frac{\pi}{180}\Big),
+\qquad
+y = R\,(\varphi - \varphi_0)\,\frac{\pi}{180},
+\qquad R = 6\,371\,000~\text{m}
+\end{equation}
+
+La mesure est ensuite projetée orthogonalement sur les tronçons extérieurs de l'itinéraire proches
+de la position courante (un tronçon en arrière, jusqu'à six en avant). Pour un tronçon $[A, B]$,
+avec $\vec{q} = \overrightarrow{AB}$ et $\vec{p} = \overrightarrow{AM}$ le vecteur vers la mesure
+$M$ :
+\begin{equation}
+f = \min\!\Big(\max\!\Big(\frac{\vec{p}\cdot\vec{q}}{\|\vec{q}\|^2}, 0\Big), 1\Big),
+\qquad
+d_\perp = \big\|\vec{p} - f\,\vec{q}\big\|
+\end{equation}
+Le tronçon minimisant $d_\perp$ donne la nouvelle progression $(i, f)$. Pour absorber le bruit du
+GPS, un recul de moins de 6 mètres le long du trajet est ignoré.
+
+Pour l'affichage, le point GPS n'est pas forcé sur l'itinéraire : il est placé sur l'allée
+extérieure la plus proche du réseau complet, en conservant à la fois la position le long de l'allée
+et l'écart latéral (converti dans le repère du plan à l'aide du rapport entre la longueur de
+l'allée sur le plan et sa longueur en mètres). L'utilisateur voit ainsi ses détours réels, entourés
+d'un cercle représentant la précision de la mesure.
+
+\subsection{Détection d'écart et recalcul de l'itinéraire}
+
+L'utilisateur est considéré comme hors itinéraire lorsque sa distance au trajet dépasse
+$\max(30~\text{m}, \text{précision})$. Si cette situation dure plus de 6 secondes (ou à la demande,
+via un bouton), l'application détermine le nœud extérieur géolocalisé le plus proche. Si ce nœud
+fait partie de la suite de l'itinéraire, l'utilisateur a simplement pris un raccourci et la
+progression y est avancée ; sinon, un nouvel itinéraire vers la même destination est demandé au
+serveur à partir de ce nœud, en transmettant directement le nœud de destination
+(\texttt{destNode}) afin d'éviter une nouvelle interprétation de la requête. Un délai minimal de
+20 secondes entre deux recalculs évite les recalculs en cascade.
+
+\subsection{Affichage cartographique}
+
+La carte affiche uniquement le plan du niveau où se trouve l'utilisateur et le tronçon de
+l'itinéraire situé sur ce plan. Lorsque la progression atteint un nœud situé sur un autre niveau,
+le plan change automatiquement ; un marqueur orange indique l'endroit où le trajet quitte le plan
+courant, avec une flèche vers le haut ou vers le bas selon le sens de l'escalier, et une épingle
+rouge marque la destination lorsqu'elle se trouve sur le plan affiché.
+
+Le trajet restant part de la position de l'utilisateur et raccourcit au fur et à mesure qu'il
+avance ; il est tracé en bleu avec un contour blanc et des tirets animés indiquant le sens de
+marche, tandis que la portion déjà parcourue est grisée. Par défaut, la caméra suit l'utilisateur
+avec un zoom rapproché ; dès qu'il déplace la carte, le suivi est suspendu et un bouton
+« Recentrer » apparaît. Les marqueurs et l'épaisseur des traits sont recalculés en fonction du zoom
+afin de conserver une taille constante à l'écran, et les déplacements du point sont lissés par une
+interpolation exponentielle pour éviter les sauts. Enfin, l'écran est maintenu allumé pendant la
+navigation (API \emph{Wake Lock}).
+
+\section{Déploiement}
+
+Dans la version présentée en août, l'application tournait sur l'ordinateur de développement et
+les QR Codes pointaient vers son adresse sur le réseau local (\texttt{http://192.168.x.x:5173}),
+ce qui ne permettait de l'utiliser qu'aux téléphones connectés au même réseau Wi-Fi. Pour lever
+cette contrainte, l'application a été rendue déployable sur une adresse publique.
+
+Le site et l'API sont servis par un seul service : FastAPI sert les fichiers compilés de
+l'application React en plus des endpoints \texttt{/api}. Il n'existe ainsi qu'une seule adresse,
+sans proxy ni configuration CORS spécifique. L'image Docker est construite en deux étapes : une
+image Node.js~20 compile le frontend avec Vite, puis une image Python~3.12 installe les dépendances
+du backend et embarque le code du serveur, les données et le site compilé.
+
+L'hébergement utilise la plateforme Render, configurée par un fichier \emph{Blueprint}
+(\texttt{render.yaml}) : un service web Docker, surveillé via \texttt{/api/health}, redéployé
+automatiquement à chaque envoi sur le dépôt Git, et dont la clé Groq est saisie dans le tableau de
+bord de la plateforme. Render fournit automatiquement une adresse HTTPS. Avec l'offre gratuite, le
+service se met en veille après environ 15 minutes d'inactivité, et la première requête suivante
+peut prendre de 30 à 60 secondes ; une offre payante ou un ping régulier est donc recommandé pour
+un usage réel sur le campus.
+
+Enfin, le script de génération des QR Codes lit les points d'entrée dans la feuille
+\emph{Node\_Types} et produit, pour chacun, une image encodant \texttt{<adresse
+publique>/?start=<Node\_Id>}, avec un niveau de correction d'erreur élevé (Q). Il refuse les
+adresses locales (\texttt{localhost}, \texttt{192.168.x.x}) afin d'éviter de reproduire le
+problème de réseau, et peut également générer des codes pour d'autres types de nœuds (par exemple
+les escaliers), permettant à l'utilisateur de resynchroniser sa position en chemin.
+
+\medskip
+Ce chapitre a présenté la méthodologie suivie pour la construction du système, depuis le choix des
+outils jusqu'à un pipeline complet reliant la requête de l'utilisateur au calcul de l'itinéraire,
+au guidage en temps réel et à la mise en ligne. Une attention particulière a été portée à la
+fiabilité des données, contrôlée à l'aide d'un tableau de bord Power BI, ainsi qu'à la robustesse
+du service face à l'indisponibilité du modèle de langage. Le chapitre suivant présente les
+résultats obtenus ainsi que les difficultés techniques rencontrées et les solutions apportées.
+
+% =====================================================================
+% Chapitre 4
+% =====================================================================
+\chapter{Résultats, difficultés rencontrées et solutions}
+
+Ce chapitre dresse un bilan du travail réalisé. Il présente d'abord les résultats obtenus, sous la
+forme de l'application telle qu'elle se présente à l'utilisateur final, puis détaille les
+principales difficultés techniques rencontrées au cours du développement — qu'elles soient liées à
+des contraintes externes, à la fidélité de la représentation cartographique, à l'ergonomie mobile,
+aux capteurs ou au déploiement — ainsi que les solutions mises en œuvre. Cette démarche de
+résolution, fondée sur une analyse du code et des données plutôt que sur des corrections
+superficielles, constitue une part importante du travail effectué.
+
+\section{Résultats obtenus}
+
+L'application, dans son état actuel, permet à un utilisateur ayant scanné un QR Code de formuler
+sa destination en langage naturel et d'obtenir un itinéraire tracé sur les plans réels du campus,
+accompagné d'une instruction par étape. Pendant la marche, la carte suit l'utilisateur, le trajet
+restant raccourcit, l'instruction courante et la distance restante se mettent à jour, et le plan
+change automatiquement lorsque le trajet passe à un autre étage. L'interface est disponible en
+français et en anglais, gère les trajets traversant plusieurs bâtiments et plusieurs étages, et
+reste utilisable aussi bien sur ordinateur que sur smartphone. Déployée sur une adresse HTTPS
+publique, elle est accessible depuis n'importe quel réseau (Wi-Fi ou données mobiles).
+
+Au niveau mobile :
+
+\begin{figure}[h]
+\centering
+\begin{subfigure}[t]{0.47\linewidth}
+  \centering
+  \img{\linewidth}{mobile_carte.png}
+  \caption{Carte et instruction courante}
+  \label{fig:mob1}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \centering
+  \img{\linewidth}{mobile_instructions.png}
+  \caption{Liste des instructions générées}
+  \label{fig:mob2}
+\end{subfigure}
+\caption{Interface mobile lors de la recherche de la Salle B7}
+\label{fig:mobile}
+\end{figure}
+
+Transition d'un itinéraire multi-niveaux du rez-de-chaussée vers le premier étage :
+
+\begin{figure}[h]
+\centering
+\begin{subfigure}[t]{0.47\linewidth}
+  \centering
+  \img{\linewidth}{mobile_escalier.png}
+  \caption{Indication d'escalier et marqueur de sortie du plan au rez-de-chaussée}
+  \label{fig:mob3}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \centering
+  \img{\linewidth}{mobile_etage1.png}
+  \caption{Changement automatique vers le plan du 1er étage}
+  \label{fig:mob4}
+\end{subfigure}
+\caption{Changement d'étage automatique au cours d'un itinéraire}
+\label{fig:etages}
+\end{figure}
+
+\begin{figure}[h]
+\centering
+\begin{subfigure}[t]{0.47\linewidth}
+  \centering
+  \img{\linewidth}{mobile_gps.png}
+  \caption{Suivi GPS sur un tronçon extérieur, avec cercle de précision}
+  \label{fig:mob5}
+\end{subfigure}\hfill
+\begin{subfigure}[t]{0.47\linewidth}
+  \centering
+  \img{\linewidth}{mobile_recalcul.png}
+  \caption{Itinéraire recalculé après un écart au trajet}
+  \label{fig:mob6}
+\end{subfigure}
+\caption{Guidage en extérieur : suivi GPS et recalcul automatique}
+\label{fig:gps}
+\end{figure}
+
+La Figure~\ref{fig:gps} illustre le guidage sur la partie extérieure du campus, par exemple vers la
+buvette des enseignants, accessible uniquement par une porte extérieure. Sur ces tronçons, le point
+bleu suit la position GPS réelle ; lorsque l'utilisateur s'éloigne durablement du trajet,
+l'itinéraire est recalculé depuis le point le plus proche et un message l'en informe.
+
+\section{Difficultés rencontrées et solutions}
+
+Plusieurs difficultés techniques significatives ont jalonné le développement du projet. Elles sont
+présentées ci-après par ordre chronologique approximatif d'apparition.
+
+\subsection{Contraintes liées au modèle de langage}
+\label{sec:llm}
+
+L'implémentation initiale du module d'intelligence artificielle reposait sur l'API Gemini
+(bibliothèque \texttt{google-genai}). Elle s'est heurtée à des limites de quota bloquantes dès les
+premiers tests : le service retournait une erreur 429, avec une limite fixée à 0 requête pour le
+modèle utilisé, rendant tout appel impossible dans le cadre d'un usage gratuit. Une migration vers
+l'API Groq a été effectuée, celle-ci offrant un niveau gratuit compatible avec les besoins du
+développement ; le modèle \emph{llama-3.1-8b-instant} a été retenu dans un premier temps.
+
+Quelques jours après l'envoi du rapport d'avancement du 3 août 2026, ce modèle a cessé de répondre
+de manière fiable. L'application a alors été migrée vers \emph{openai/gpt-oss-20b}, puis vers
+\emph{openai/gpt-oss-120b}, plus fiable dans le respect des consignes de rédaction, sans
+modification de l'architecture d'appel : le modèle est désormais un simple paramètre de
+configuration (\texttt{GROQ\_MODEL}).
+
+Cet épisode illustre une contrainte propre à l'usage de modèles tiers : leur disponibilité et leurs
+conditions d'accès évoluent indépendamment du code applicatif. Il a conduit à deux choix
+structurants. D'une part, une intégration faiblement couplée au modèle exact utilisé. D'autre part,
+la mise en place de mécanismes de repli pour chacune des deux tâches confiées au modèle :
+correspondance approximative locale pour l'identification de la destination, et instructions
+générées par règles pour le guidage. Le service reste ainsi utilisable même sans clé d'API ou en
+cas de panne du fournisseur.
+
+Une seconde difficulté a concerné la qualité des instructions générées. Les premières versions
+recevaient la suite brute des descriptions de nœuds et produisaient parfois des instructions
+incohérentes : nombre d'étapes différent du nombre de points de passage (rendant impossible
+l'affichage de l'instruction correspondant à la position), consigne de monter un escalier
+simplement cité comme repère, identifiants techniques (« N109 ») recopiés dans le texte, ou
+« étage 0 » au lieu de « rez-de-chaussée ». La solution a consisté à calculer de façon
+déterministe, côté serveur, les informations critiques (bâtiment, étage, entrée, sortie, sens de
+l'escalier) et à les transmettre explicitement au modèle, à lui imposer une réponse au format JSON,
+puis à valider systématiquement cette réponse avant de l'utiliser.
+
+\emph{N.B. : l'erreur 429 signifie que trop de requêtes ont été envoyées au serveur dans un laps de
+temps trop court.}
+
+\subsection{Constitution et fiabilité de la base de données}
+
+La constitution de la base de données du campus a été l'une des tâches les plus longues du projet.
+Le recensement des 68 points d'intérêt et la saisie des 145 nœuds et 174 arêtes ont nécessité un
+travail manuel important : relevé des coordonnées, retranscription dans le classeur Excel, puis
+vérification croisée avec les plans en cours de conception. Le suivi GPS a ajouté une étape
+supplémentaire : le relevé sur le terrain des coordonnées GPS des 31 nœuds extérieurs.
+
+Cette phase s'est révélée intrinsèquement itérative : chaque test de l'application pouvait révéler
+une incohérence — nœud mal rattaché à son étage, arête manquante ou mal typée, coordonnée erronée —
+nécessitant un retour au fichier source, une correction, puis un nouveau test. Le tableau de bord
+Power BI présenté en section~\ref{sec:bdd} a été conçu pour systématiser cette vérification. Ce
+travail de fiabilisation reste néanmoins continu : de nouvelles incohérences ont été identifiées
+plusieurs semaines après la mise en place initiale du graphe, et un nœud (N129) reste aujourd'hui
+isolé. Cela souligne la nécessité de maintenir ces contrôles tout au long du développement plutôt
+que de les considérer comme une étape ponctuelle.
+
+\subsection{Choix de l'outil de conception des plans}
+
+La conception des plans vectoriels a fait l'objet d'une réorientation en cours de projet. Une
+première version a été réalisée avec draw.io, choisi pour sa simplicité de prise en main. Cette
+approche s'est révélée insuffisante pour représenter fidèlement l'agencement réel des bâtiments :
+le niveau de détail atteignable restait limité, et la structure des fichiers SVG exportés se
+prêtait mal à un traitement précis des coordonnées. Les plans ont donc été entièrement repris sous
+Inkscape, un éditeur vectoriel offrant un contrôle plus fin sur le tracé et les coordonnées. Cette
+réorientation a impliqué une phase d'apprentissage de l'outil, jusqu'alors non maîtrisé par
+l'équipe, avant de pouvoir reproduire l'ensemble des plans avec la précision requise — précision
+indispensable à la calibration présentée ci-après.
+
+\subsection{Calibration cartographique des plans}
+
+Une fois les plans redessinés sous Inkscape, une difficulté est apparue au moment de superposer
+l'itinéraire calculé : la ligne représentant le trajet n'apparaissait pas à l'endroit attendu,
+bien que le calcul du plus court chemin soit correct côté serveur.
+
+L'origine du problème résidait dans une confusion entre deux systèmes de coordonnées présents dans
+un même fichier SVG : le \texttt{viewBox}, repère interne utilisé par le navigateur pour positionner
+les éléments du plan, et le repère de la page affiché par la barre d'outils d'Inkscape (exprimé en
+points, pt), depuis lequel les coordonnées des nœuds avaient été relevées puis reportées dans le
+classeur Excel. Ces deux repères, bien que définis dans le même fichier, ne coïncident pas.
+
+La calibration a été résolue en établissant le facteur de conversion exact entre ces deux repères,
+déduit des dimensions déclarées par les fichiers SVG (\texttt{viewBox} de largeur 39\,841,941 pour
+une page de 4\,870~pt), puis validée par comparaison avec des nœuds de référence positionnés
+manuellement :
+\begin{equation}
+\text{échelle} = \frac{39\,841{,}941}{4\,870} = 8{,}181097
+\end{equation}
+\begin{equation}
+X_{\text{réel}} = 8{,}181097 \times X_{\text{pt}} - 4000, \qquad
+Y_{\text{réel}} = 8{,}181097 \times Y_{\text{pt}} - 4000
+\end{equation}
+
+La première relation détermine le rapport d'échelle entre le repère vectoriel du fichier et les
+mesures relevées sous Inkscape, garantissant l'homothétie de la transformation. Les deux suivantes
+appliquent ce facteur aux coordonnées initiales, en introduisant une translation constante de
+$-4000$ unités qui corrige le décalage d'origine du \texttt{viewBox} ($-4000$, $-4000$). Cette
+conversion, appliquée côté serveur avant tout envoi au frontend, est commune aux quatre plans.
+
+\begin{figure}[h]
+\centering
+\img{0.95\linewidth}{calibration_avant_apres.png}
+\caption{Comparaison avant/après de l'alignement des nœuds sur un même étage (version desktop)}
+\label{fig:calib}
+\end{figure}
+
+Cette phase a également révélé une anomalie : un itinéraire traversant plusieurs bâtiments situés
+au même étage affichait un onglet distinct pour chacun, alors qu'ils correspondent au même plan
+physique. La correction a consisté à regrouper les tronçons de l'itinéraire par plan d'affichage
+plutôt que par bâtiment : chaque nœud reçoit un niveau de plan (\texttt{F0} à \texttt{F3}, les
+nœuds extérieurs étant rattachés au plan du rez-de-chaussée). Ce même principe a ensuite permis de
+remplacer les onglets par un changement de plan automatique, piloté par la position de
+l'utilisateur.
+
+\subsection{Ergonomie mobile}
+
+Le comportement de la carte interactive sur smartphone a posé plusieurs difficultés. Dans une
+première version, le zoom et le déplacement, fonctionnels sur ordinateur, étaient inopérants sur
+mobile : leur gestion reposait exclusivement sur des événements de souris (\texttt{mousedown},
+\texttt{mousemove}, \texttt{wheel}), absents sur les terminaux tactiles. Par ailleurs, la
+désactivation du comportement tactile par défaut du navigateur — nécessaire pour un contrôle
+personnalisé du zoom — avait pour effet, en l'absence de gestionnaire tactile, de bloquer toute
+interaction.
+
+Une gestion tactile dédiée a d'abord été ajoutée (déplacement à un doigt, pincement à deux doigts).
+Lors de la refonte de la carte pour le guidage en temps réel, la gestion des gestes a été unifiée à
+l'aide des \emph{Pointer Events}, qui représentent de la même manière la souris, le doigt et le
+stylet : un pointeur actif déclenche un déplacement, deux pointeurs déclenchent un zoom
+proportionnel à l'écartement des doigts, et la capture du pointeur garantit que le geste se
+poursuit même lorsque le doigt sort de la carte. Le gestionnaire de la molette est déclaré
+explicitement comme non passif, certains navigateurs ignorant silencieusement l'annulation du
+défilement de la page dans le cas contraire.
+
+L'interface a également été repensée pour les petits écrans : mise en page occupant toute la
+hauteur de l'écran (y compris les zones réservées des téléphones à encoche), champs de saisie
+suffisamment grands pour éviter le zoom automatique d'iOS, boutons adaptés au toucher et logo de
+l'ENSAM dans l'en-tête. La lisibilité du trajet a été améliorée (tracé élargi, contour contrasté,
+marqueurs distincts pour la position, la destination et les changements d'étage).
+
+\subsection{Accès depuis le réseau du campus}
+
+Lors des tests de la version d'août, l'application n'était accessible qu'aux téléphones connectés
+au même réseau Wi-Fi que l'ordinateur de développement : les QR Codes encodaient l'adresse locale
+de cet ordinateur (\texttt{http://192.168.x.x:5173}), et le backend y tournait également. Un
+utilisateur en données mobiles, ou sur un autre réseau, ne pouvait pas ouvrir l'application.
+
+La solution a consisté à déployer l'application sur une adresse publique (section précédente) et à
+régénérer les QR Codes à partir de cette adresse. Le script de génération refuse désormais les
+adresses locales, afin que ce problème ne puisse pas être réintroduit par erreur. Le regroupement
+du site et de l'API derrière une seule adresse a en outre supprimé toute question de proxy ou de
+partage de ressources entre origines.
+
+Lors de la mise en ligne, il est également apparu que la clé de l'API Groq avait été enregistrée
+dans l'historique du dépôt Git. Elle a été révoquée et remplacée, et la clé est désormais fournie
+exclusivement par une variable d'environnement, exclue du dépôt.
+
+\subsection{Accès aux capteurs et précision de la localisation}
+
+Le suivi de la position a soulevé trois difficultés. Premièrement, les navigateurs mobiles
+n'autorisent l'accès au GPS et aux capteurs de mouvement que sur des pages sécurisées : servie en
+HTTP sur le réseau local, l'application ne recevait aucune mesure. Le serveur de développement a
+donc été configuré en HTTPS (certificat auto-signé), et l'hébergement fournit un certificat valide.
+
+Deuxièmement, iOS n'accorde l'accès à l'accéléromètre qu'à la suite d'un geste de l'utilisateur, et
+uniquement si la demande est faite immédiatement, avant toute opération asynchrone. La demande
+d'autorisation a donc été placée au début du traitement de l'appui sur « Envoyer », le module de
+navigation attendant ensuite la réponse avant d'écouter les capteurs.
+
+Troisièmement, aucune des deux sources n'est fiable seule : le podomètre dérive (longueur de pas
+fixe, pas parfois manqués), et le GPS est bruité, imprécis à proximité des bâtiments et inutilisable
+à l'intérieur. La solution retenue combine les deux sources selon le contexte (GPS lorsque la mesure
+est récente et précise sur un tronçon extérieur, podomètre sinon), contraint la position à
+l'itinéraire, ignore les petits reculs dus au bruit du GPS et n'engage un recalcul qu'après un écart
+prolongé. Lorsque l'utilisateur rescanne un QR Code en chemin, sa position est recalée exactement.
+
+\medskip
+Ce chapitre a présenté les résultats obtenus ainsi que les principales difficultés rencontrées lors
+de leur mise en œuvre. Au-delà de leur diversité apparente — fiabilité des données, calibration
+cartographique, ergonomie mobile, accès réseau, capteurs —, ces difficultés partagent un point
+commun : elles n'ont, pour la plupart, été révélées ni par la conception initiale ni par les
+contrôles automatisés, mais par les tests successifs de l'application dans des conditions proches
+de l'usage réel. L'arête reliant à tort un nœud intérieur à un nœud extérieur, l'écart de
+calibration entre le repère d'Inkscape et celui du navigateur, l'absence de gestion tactile, les QR
+Codes limités au réseau local ou les capteurs bloqués hors HTTPS sont autant d'anomalies qui
+n'affectaient en rien la validité structurelle du système, mais compromettaient son usage concret.
+Cette phase de test et de correction itérative, bien que chronophage, a constitué une part
+essentielle du travail réalisé.
+
+% =====================================================================
+% Conclusion générale
+% =====================================================================
+\chapter*{Conclusion générale}
+\addcontentsline{toc}{chapter}{Conclusion générale}
+
+Ce projet avait pour objectif de concevoir un système de navigation permettant aux étudiants, aux
+enseignants et aux visiteurs de l'ENSAM de Rabat de trouver facilement leur chemin au sein du
+campus en formulant leur destination en langage naturel. Cet objectif a été atteint sous la forme
+d'un prototype fonctionnel et accessible en ligne : après avoir scanné un QR Code identifiant son
+point de départ, l'utilisateur formule sa demande dans une interface de type chat, obtient un
+itinéraire tracé sur les plans réels du campus, puis est guidé pas à pas, en français ou en anglais,
+la carte suivant sa progression et changeant d'étage automatiquement.
+
+Sur le plan technique, le travail a d'abord consisté à modéliser le campus : les 68 points
+d'intérêt, les 145 nœuds et les 174 arêtes du graphe ont été collectés et structurés dans un
+classeur Excel, puis contrôlés à l'aide d'un tableau de bord Power BI. Le graphe est exploité avec
+NetworkX et le plus court chemin calculé par l'algorithme de Dijkstra. Un backend FastAPI orchestre
+l'ensemble du pipeline : identification de la destination par un modèle de langage via l'API Groq,
+avec une correspondance approximative locale en repli, calcul de l'itinéraire, puis rédaction d'une
+instruction par point de passage, contrôlée avant utilisation. Ce choix d'architecture confie au
+modèle de langage uniquement l'interprétation et la rédaction du texte, tandis que le calcul du
+chemin et les informations critiques (étage, escalier, entrée, sortie) restent déterminés par un
+traitement déterministe et vérifiable. Côté client, une interface React affiche le trajet sur les
+plans SVG conçus sous Inkscape et suit l'utilisateur grâce au GPS à l'extérieur et à un podomètre
+fondé sur l'accéléromètre à l'intérieur, avec recalcul automatique de l'itinéraire en cas d'écart.
+L'ensemble est conteneurisé avec Docker et déployé en HTTPS.
+
+Le développement a été l'occasion de rencontrer et de résoudre des difficultés concrètes :
+l'indisponibilité de modèles de langage liée aux quotas, qui a conduit à une intégration faiblement
+couplée et à des mécanismes de repli ; la calibration entre le repère d'Inkscape et le
+\texttt{viewBox} du navigateur, résolue par un facteur de conversion exact ; la gestion des gestes
+sur mobile ; l'accès limité au réseau local, résolu par le déploiement public ; les restrictions
+d'accès aux capteurs ; ou encore une arête erronée reliant un nœud intérieur à un nœud extérieur,
+qui a montré qu'un graphe structurellement valide n'est pas nécessairement cohérent avec la réalité
+physique qu'il représente. Ces anomalies ont pour la plupart été révélées par des tests en
+conditions réelles, ce qui souligne l'importance d'une démarche itérative de test et de correction.
+
+Le système présente néanmoins des limites propres à un prototype. À l'intérieur, la position est
+estimée par podométrie, avec une longueur de pas fixe : la précision se dégrade sur les longs
+trajets et dépend de la manière dont le téléphone est tenu. Le GPS n'est exploité que sur les
+31 nœuds extérieurs géolocalisés. Les données sont stockées dans un fichier Excel, adapté à cette
+phase mais peu approprié à une modification collaborative. L'hébergement gratuit impose un temps de
+réveil après une période d'inactivité. Enfin, la qualité des instructions dépend en partie d'un
+service externe, même si l'application reste fonctionnelle sans lui.
+
+Plusieurs perspectives d'amélioration peuvent être envisagées. Sur le plan de la localisation, des
+QR Codes placés aux escaliers et aux carrefours (déjà pris en charge par le script de génération)
+permettraient de recaler régulièrement la position ; l'utilisation de balises Bluetooth Low Energy,
+via une application native, ou la calibration de la longueur de pas par utilisateur amélioreraient
+la précision à l'intérieur. Sur le plan des données, une migration vers PostgreSQL/PostGIS et une
+interface d'administration faciliteraient la mise à jour des lieux et des plans. La recherche de
+destinations pourrait être enrichie par des techniques sémantiques (embeddings). Le calcul
+d'itinéraires pourrait intégrer des critères d'accessibilité (ascenseurs, rampes) et être étendu à
+l'ensemble des bâtiments de l'établissement, et l'interface pourrait être complétée par d'autres
+langues, dont l'arabe. Enfin, des tests à plus grande échelle auprès des étudiants permettraient de
+valider l'ergonomie auprès d'un public plus large.
+
+Sur le plan personnel et académique, ce projet a permis de mobiliser et de relier des compétences
+issues de la filière INDIA : traitement et fiabilisation des données, théorie des graphes,
+développement web, exploitation de capteurs, intégration de modèles de langage, conception
+d'interfaces et déploiement. Il a surtout offert l'occasion de conduire un projet de bout en bout,
+de la collecte des données sur le terrain jusqu'à une application en ligne, en apprenant à
+diagnostiquer et à corriger méthodiquement des problèmes concrets.
+
+% =====================================================================
+% Glossaire
+% =====================================================================
+\chapter*{Glossaire}
+\addcontentsline{toc}{chapter}{Glossaire}
+
+\begin{description}[leftmargin=0pt, itemsep=0.3em]
+\item[A*] : Algorithme de recherche de chemin qui combine le coût déjà parcouru et une estimation du
+coût restant (heuristique) pour explorer le graphe de façon plus ciblée que Dijkstra.
+\item[Accéléromètre] : Capteur du téléphone mesurant les accélérations selon trois axes ; utilisé
+ici pour détecter les pas de l'utilisateur.
+\item[API (Application Programming Interface)] : Interface permettant à deux applications de
+communiquer selon des règles définies ; utilisée pour les échanges entre le frontend et le backend,
+avec le service de modèle de langage et avec les capteurs du navigateur.
+\item[Arête] : Dans un graphe, connexion reliant deux nœuds ; représente ici un passage physique
+entre deux points du campus (couloir, escalier, allée extérieure).
+\item[Backend] : Partie du système exécutée côté serveur, responsable de la logique métier.
+\item[BLE (Bluetooth Low Energy)] : Variante basse consommation du Bluetooth, utilisée avec des
+balises (\emph{beacons}) pour la localisation intérieure.
+\item[Boucle (self-loop)] : Arête reliant un nœud à lui-même, considérée comme une anomalie.
+\item[Calibration] : Processus consistant à faire correspondre les coordonnées des nœuds du graphe
+avec leur position réelle sur les plans affichés.
+\item[Dijkstra] : Algorithme de calcul du plus court chemin entre deux nœuds d'un graphe pondéré,
+utilisé ici pour déterminer l'itinéraire optimal.
+\item[Docker] : Outil de conteneurisation permettant d'empaqueter une application et ses
+dépendances dans une image exécutable sur n'importe quel serveur.
+\item[Embeddings] : Représentations numériques de textes permettant de comparer leur sens, utilisées
+dans la recherche sémantique.
+\item[Endpoint] : Point d'accès d'une API REST, identifié par une URL.
+\item[Erreur 429] : Code HTTP indiquant que trop de requêtes ont été envoyées à un serveur dans un
+temps donné (limite de quota dépassée).
+\item[FastAPI] : Framework Python utilisé pour développer le backend de l'application.
+\item[Fingerprinting (empreinte Wi-Fi)] : Technique de localisation consistant à comparer les
+signaux Wi-Fi captés avec une cartographie préalablement enregistrée.
+\item[Frontend] : Partie du système exécutée côté client, correspondant à l'interface visible.
+\item[GNSS / GPS] : Systèmes de positionnement par satellites, efficaces en extérieur mais peu
+fiables à l'intérieur des bâtiments.
+\item[Graphe] : Structure de données composée de nœuds et d'arêtes, utilisée pour modéliser le
+réseau de passages du campus.
+\item[Groq] : Service d'inférence donnant accès, via une API, à des modèles de langage hébergés
+(ici successivement llama-3.1-8b-instant, openai/gpt-oss-20b puis openai/gpt-oss-120b).
+\item[HTTPS] : Version sécurisée du protocole HTTP, exigée par les navigateurs pour accéder au GPS et
+aux capteurs de mouvement.
+\item[Heuristique] : Estimation du coût restant jusqu'à la destination, utilisée par l'algorithme A*.
+\item[Homothétie] : Transformation géométrique qui multiplie toutes les distances par un même
+facteur ; utilisée ici pour convertir les coordonnées entre deux repères.
+\item[Inkscape] : Éditeur de graphisme vectoriel utilisé pour concevoir les plans des étages au
+format SVG.
+\item[JSON (JavaScript Object Notation)] : Format de données structuré, utilisé pour les échanges
+entre le frontend et le backend et pour les réponses du modèle de langage.
+\item[LLM (Large Language Model)] : Modèle de langage de grande taille, utilisé pour l'extraction de
+la destination et la rédaction des instructions.
+\item[Mécanisme de repli (fallback)] : Traitement de secours utilisé lorsque le traitement principal
+(ici le modèle de langage) est indisponible ou renvoie une réponse invalide.
+\item[Nœud] : Dans un graphe, point représentant un emplacement précis du campus (intersection,
+accès à une salle, escalier, point d'entrée).
+\item[Nœud orphelin] : Nœud qui n'est relié à aucune arête, détecté lors du contrôle de qualité.
+\item[Node.js] : Environnement d'exécution JavaScript utilisé pour compiler le frontend.
+\item[NetworkX] : Bibliothèque Python de manipulation de graphes, utilisée pour la modélisation du
+campus et le calcul du plus court chemin.
+\item[pandas] : Bibliothèque Python de manipulation de données tabulaires, utilisée pour charger le
+classeur Excel.
+\item[Panoramique (pan)] : Déplacement du plan à l'écran, à la souris ou avec un doigt.
+\item[PDR (Pedestrian Dead Reckoning)] : Navigation pédestre à l'estime, consistant à estimer le
+déplacement à partir des pas détectés par les capteurs inertiels.
+\item[Pinch-to-zoom] : Geste tactile à deux doigts permettant de zoomer ou dézoomer.
+\item[Pipeline] : Enchaînement structuré des étapes de traitement d'une requête.
+\item[Pointer Events] : Événements du navigateur représentant de manière unifiée la souris, le
+toucher et le stylet.
+\item[Power BI] : Outil d'analyse et de visualisation de données de Microsoft, utilisé pour le
+contrôle de la cohérence de la base de données.
+\item[Projection orthogonale] : Opération consistant à trouver le point d'un segment le plus proche
+d'un point donné ; utilisée pour placer une mesure GPS sur l'itinéraire.
+\item[Pydantic] : Bibliothèque Python de validation des données, intégrée à FastAPI.
+\item[QR Code] : Code-barres bidimensionnel encodant une information, utilisé ici pour identifier le
+point de départ de l'utilisateur.
+\item[React] : Bibliothèque JavaScript utilisée pour le développement du frontend.
+\item[Recalcul d'itinéraire] : Nouveau calcul du plus court chemin déclenché lorsque l'utilisateur
+s'écarte durablement du trajet.
+\item[Recherche sémantique] : Recherche fondée sur le sens d'une requête plutôt que sur la
+correspondance exacte des mots.
+\item[Render] : Plateforme d'hébergement utilisée pour déployer l'application.
+\item[REST (Representational State Transfer)] : Style d'architecture pour la conception d'API,
+reposant sur des requêtes HTTP standard.
+\item[SIG (Système d'Information Géographique)] : Système de stockage, d'analyse et de
+représentation de données géographiques.
+\item[SVG (Scalable Vector Graphics)] : Format d'image vectorielle utilisé pour les plans du campus.
+\item[TALN (Traitement Automatique du Langage Naturel)] : Domaine de l'intelligence artificielle
+consacré à l'interprétation et à la génération de texte en langage humain.
+\item[UWB (Ultra-Wideband)] : Technologie radio permettant de mesurer des distances avec une grande
+précision, au prix d'un matériel spécialisé.
+\item[ViewBox] : Attribut d'un fichier SVG définissant le repère de coordonnées interne utilisé pour
+positionner les éléments du dessin.
+\item[Vite] : Outil de développement et de construction d'applications web, utilisé avec React.
+\item[PostgreSQL / PostGIS] : Système de gestion de base de données et son extension pour les
+données géographiques, envisagés comme évolution du stockage.
+\item[Wake Lock] : API du navigateur permettant d'empêcher la mise en veille de l'écran.
+\item[UX (User Experience)] : Expérience utilisateur, c'est-à-dire la qualité globale de
+l'interaction avec l'application.
+\end{description}
+
+% =====================================================================
+% Bibliographie
+% =====================================================================
+\begin{thebibliography}{99}
+\addcontentsline{toc}{chapter}{Bibliographie}
+
+\bibitem{modo} Modo Team, « Campus navigation is more than maps: How indoor and outdoor wayfinding
+improves the student experience », \emph{Modo Labs}, 16 juill. 2026. [En ligne]. Disponible :
+\url{https://modolabs.com/industry/higher-education/campus-navigation/}.
+
+\bibitem{lakshmi} K. Muthu Lakshmi, R. Manojkumar, R. Kesavan et S. Arul Kumaran, « Campus route
+map », \emph{Int. Res. J. Adv. Eng. Hub (IRJAEH)}, vol.~3, n\textsuperscript{o}~3, p.~496--501,
+mars 2025, e-ISSN 2584-2137, doi : 10.47392/IRJAEH.2025.0069.
+
+\bibitem{hafashimana} E. Hafashimana, « Conception et mise en œuvre d'un système de navigation
+intérieure économique utilisant des technologies open-source dans les bâtiments universitaires »,
+Mémoire de M.Sc., Univ. du Québec à Chicoutimi, Chicoutimi, QC, Canada, 2024. [En ligne].
+Disponible : \url{https://constellation.uqac.ca/id/eprint/10118/1/Hafashimana_uqac_0862N_11282.pdf}.
+
+\bibitem{kunhoth} J. Kunhoth, A. G. Karkar, S. Al-Maadeed et A. Al-Ali, « Indoor positioning and
+wayfinding systems: a survey », \emph{Human-centric Comput. Inf. Sci.}, vol.~10,
+art.~n\textsuperscript{o}~18, 2020, doi : 10.1186/s13673-020-00222-0.
+
+\bibitem{dedes} G. Dedes et A. G. Dempster, « Indoor GPS positioning: challenges and
+opportunities », dans \emph{Proc. IEEE 62nd Veh. Technol. Conf. (VTC-2005-Fall)}, Dallas, TX, USA,
+sept. 2005, doi : 10.1109/VETECF.2005.1557943.
+
+\bibitem{polestar} « Bluetooth Low Energy positioning. Room \& zone accuracy, at scale. »,
+\emph{Polestar}. [En ligne]. Disponible : \url{https://www.polestar.eu/technologies/ble-positioning/}.
+
+\bibitem{kim} D. Kim, J.-H. Park et Y.-J. Suh, « A Wi-Fi fingerprinting indoor localization
+framework using feature-level augmentation via variational graph auto-encoder »,
+\emph{Electronics}, vol.~14, n\textsuperscript{o}~14, art.~n\textsuperscript{o}~2807, juill. 2025,
+doi : 10.3390/electronics14142807.
+
+\bibitem{gnss} « The difference between GNSS and GPS explained », \emph{Global GPS Systems},
+3 nov. 2020 (mis à jour en mai 2026). [En ligne]. Disponible :
+\url{https://globalgpssystems.com/gnss/the-difference-between-gnss-and-gps-explained/}.
+
+\bibitem{uwb} « Ultra-wideband (UWB) », dans \emph{RTLS Glossary}, Locaxion. [En ligne]. Disponible :
+\url{https://locaxion.com/resources/rtls-glossary/ultra-wideband-uwb/}.
+
+\bibitem{qr} Shreesh, « En quoi les QR Codes figurant sur les plans du campus facilitent-ils
+l'orientation ? », \emph{The QR Code Generator} (blog), mis à jour le 4 déc. 2025. [En ligne].
+Disponible : \url{https://www.the-qrcode-generator.com/fr/blog/campus-map-qr-code}.
+
+\bibitem{leedev} LeeDev428, « From Static Floor Plans to Searchable Campus Navigation with SVG and
+A* », \emph{LeeDev} (blog), 2026. [En ligne]. Disponible :
+\url{https://leedev.vercel.app/blog/svg-campus-navigation-a-star-pathfinding}.
+
+\bibitem{inkscape} K. Schnider, « Inkscape : éditeur SVG, dessin vectoriel », \emph{Libellules}
+(blog), 31 janv. 2024. [En ligne]. Disponible :
+\url{https://www.libellules.net/post/inkscape-\%C3\%A9diteur-svg-dessin-vectoriel}.
+
+\bibitem{dijkstra} « Dijkstra's algorithm », \emph{Coddy}. [En ligne]. Disponible :
+\url{https://coddy.tech/visualize/fr/graphs/dijkstras-algorithm}.
+
+\bibitem{astar} R. Kumar, « L'algorithme A* : un guide complet », \emph{DataCamp}, févr. 2025.
+[En ligne]. Disponible : \url{https://www.datacamp.com/fr/tutorial/a-star-algorithm}.
+
+\bibitem{nx1} NetworkX Developers, « NetworkX: Network analysis in Python ». [En ligne].
+Disponible : \url{https://networkx.org/en/}.
+
+\bibitem{nx2} NetworkX Developers, « Tutorial », dans \emph{NetworkX Documentation}, version stable.
+[En ligne]. Disponible : \url{https://networkx.org/documentation/stable/tutorial.html}.
+
+\bibitem{fastapi} S. Ramírez, « FastAPI documentation ». [En ligne]. Disponible :
+\url{https://fastapi.tiangolo.com/}.
+
+\bibitem{groq} Groq, « Supported Models », \emph{GroqCloud Documentation}. [En ligne]. Disponible :
+\url{https://console.groq.com/docs/models}.
+
+\bibitem{mdngeo} MDN Web Docs, « Geolocation API », Mozilla. [En ligne]. Disponible :
+\url{https://developer.mozilla.org/en-US/docs/Web/API/Geolocation_API}.
+
+\bibitem{mdnmotion} MDN Web Docs, « DeviceMotionEvent », Mozilla. [En ligne]. Disponible :
+\url{https://developer.mozilla.org/en-US/docs/Web/API/DeviceMotionEvent}.
+
+\bibitem{mdnpointer} MDN Web Docs, « Pointer events », Mozilla. [En ligne]. Disponible :
+\url{https://developer.mozilla.org/en-US/docs/Web/API/Pointer_events}.
+
+\bibitem{mdnwake} MDN Web Docs, « Screen Wake Lock API », Mozilla. [En ligne]. Disponible :
+\url{https://developer.mozilla.org/en-US/docs/Web/API/Screen_Wake_Lock_API}.
+
+\bibitem{difflib} Python Software Foundation, « difflib — Helpers for computing deltas »,
+\emph{Python 3 Documentation}. [En ligne]. Disponible :
+\url{https://docs.python.org/3/library/difflib.html}.
+
+\bibitem{docker} Docker Inc., « Multi-stage builds », \emph{Docker Docs}. [En ligne]. Disponible :
+\url{https://docs.docker.com/build/building/multi-stage/}.
+
+\bibitem{render} Render, « Blueprint YAML Reference », \emph{Render Docs}. [En ligne]. Disponible :
+\url{https://render.com/docs/blueprint-spec}.
+
+\end{thebibliography}
+
+\end{document}
